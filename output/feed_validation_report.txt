@@ -1,0 +1,4 @@
+feed_validation_report
+
+app=Notion package=notion.id feed_type=release_feed sample_n=5 count_version_like=0 count_timestamp=5 count_changelog_style=0 count_explicit_date_in_text=0 parser_bozo=False url=https://www.notion.com/releases/rss.xml
+app=Duolingo package=com.duolingo feed_type=product_blog sample_n=5 count_version_like=0 count_timestamp=5 count_changelog_style=0 count_explicit_date_in_text=0 parser_bozo=False url=https://blog.duolingo.com/rss/

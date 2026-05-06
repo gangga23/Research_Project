@@ -1,0 +1,7 @@
+google-play-scraper>=1.2.7
+pandas>=2.2.0
+openpyxl>=3.1.0
+requests>=2.31.0
+python-dateutil>=2.9.0
+feedparser>=6.0.11
+matplotlib>=3.8.0

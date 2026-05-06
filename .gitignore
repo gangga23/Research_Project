@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+.venv/
+env/
+
+# Generated outputs (keep canonical deliverables tracked)
+output/**
+!output/app_master.csv
+!output/app_version_history.csv
+!output/submission_observations.csv
+!output/validation_report.txt
+!output/data_quality_report.txt
+!output/feed_validation_report.txt
+!output/schema_tables.txt
+!output/normalized_dataset.xlsx
+
+# Cursor IDE metadata
+.cursor/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db

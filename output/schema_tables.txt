@@ -1,0 +1,28 @@
+TABLE submission_observations (assignment-aligned denormalized export)
+  app_id, app_name, platform, developer, category, initial_release_date,
+  version_number, release_date, is_current_version (Yes | No | Unknown),
+  store_current_version, store_current_version_release_date, listing_source_url,
+  release_notes, update_category, source_type, confidence_level, notes
+
+TABLE app_master
+  app_id, app_name, platform, developer, category, initial_release_date,
+  source_url, current_version, current_version_release_date, notes
+
+TABLE app_version_history
+  app_id, app_name, platform
+  version_number (empty string when unknown; never fabricated)
+  release_date (ISO YYYY-MM-DD or empty)
+  release_notes (cleaned; Not available when absent)
+  source_type (strict):
+    - play_store_snapshot | wayback_snapshot | developer_changelog |
+      feature_signal | review_inferred (Android)
+    - app_store_web (iOS web / lookup fallback)
+  confidence_level: high | medium | low
+  update_category: one of ten fixed labels
+
+Android: Play live HTML+app() snapshot (high) → Wayback archived Play pages
+(medium) → optional feed URL: validator classifies feed; matching items become
+developer_changelog, non-matching items feature_signal → review_inferred (low)
+only if snapshot+Wayback yield no structured signal and the feed produced no
+developer_changelog rows. iOS: app_store_web embedded versionHistory (high) or
+lookup-only fallback (medium).

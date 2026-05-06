@@ -1,0 +1,84 @@
+[
+  {
+    "app_key": "instagram",
+    "app_name": "Instagram",
+    "ios_app_id": 389801252,
+    "android_package": "com.instagram.android",
+    "category_label": "Social",
+    "monetization_bucket": "ads_creator"
+  },
+  {
+    "app_key": "tiktok",
+    "app_name": "TikTok",
+    "ios_app_id": 835599320,
+    "android_package": "com.zhiliaoapp.musically",
+    "category_label": "Social / entertainment",
+    "monetization_bucket": "ads_creator"
+  },
+  {
+    "app_key": "spotify",
+    "app_name": "Spotify",
+    "ios_app_id": 324684580,
+    "android_package": "com.spotify.music",
+    "category_label": "Music",
+    "monetization_bucket": "subscription_ads"
+  },
+  {
+    "app_key": "netflix",
+    "app_name": "Netflix",
+    "ios_app_id": 363590051,
+    "android_package": "com.netflix.mediaclient",
+    "category_label": "Video streaming",
+    "monetization_bucket": "subscription"
+  },
+  {
+    "app_key": "amazon_shopping",
+    "app_name": "Amazon Shopping",
+    "ios_app_id": 297606951,
+    "android_package": "com.amazon.mShop.android.shopping",
+    "category_label": "Shopping",
+    "monetization_bucket": "marketplace_retail_ads"
+  },
+  {
+    "app_key": "uber",
+    "app_name": "Uber",
+    "ios_app_id": 368677368,
+    "android_package": "com.ubercab",
+    "category_label": "Transportation",
+    "monetization_bucket": "marketplace_take_rate"
+  },
+  {
+    "app_key": "doordash",
+    "app_name": "DoorDash",
+    "ios_app_id": 719972451,
+    "android_package": "com.dd.doordash",
+    "category_label": "Food delivery",
+    "monetization_bucket": "marketplace_take_rate_sub"
+  },
+  {
+    "app_key": "paypal",
+    "app_name": "PayPal",
+    "ios_app_id": 283646709,
+    "android_package": "com.paypal.android.p2pmobile",
+    "category_label": "Finance",
+    "monetization_bucket": "payments_fintech"
+  },
+  {
+    "app_key": "notion",
+    "app_name": "Notion",
+    "ios_app_id": 1232780281,
+    "android_package": "notion.id",
+    "android_changelog_feed_url": "https://www.notion.com/releases/rss.xml",
+    "category_label": "Productivity",
+    "monetization_bucket": "freemium_subscription"
+  },
+  {
+    "app_key": "duolingo",
+    "app_name": "Duolingo",
+    "ios_app_id": 570060128,
+    "android_package": "com.duolingo",
+    "android_changelog_feed_url": "https://blog.duolingo.com/rss/",
+    "category_label": "Education",
+    "monetization_bucket": "freemium_ads_sub"
+  }
+]
