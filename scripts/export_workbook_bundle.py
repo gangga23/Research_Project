@@ -14,6 +14,31 @@ from pathlib import Path
 import pandas as pd
 
 _SPOTIFY_CONTAM_RE = r"(?:With the Spotify music and podcast app|WHY SPOTIFY FOR MUSIC AND PODCASTS\?)"
+
+
+def _fix_mojibake_release_notes(version_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Repair common mojibake punctuation in cached release_notes without re-scraping
+    (e.g. "Weâ€™re" -> "We’re").
+    """
+    if version_df.empty or "release_notes" not in version_df.columns:
+        return version_df
+    rn = version_df["release_notes"].fillna("").astype(str)
+    if not rn.str.contains(r"[âÃ]", regex=True).any():
+        return version_df
+    df = version_df.copy()
+    df["release_notes"] = (
+        rn.str.replace("â€™", "’", regex=False)
+        .str.replace("â€˜", "‘", regex=False)
+        .str.replace("â€œ", "“", regex=False)
+        .str.replace("â€�", "”", regex=False)
+        .str.replace("â€“", "–", regex=False)
+        .str.replace("â€”", "—", regex=False)
+        .str.replace("â€¦", "…", regex=False)
+        .str.replace("Â ", " ", regex=False)
+        .str.replace("Â", "", regex=False)
+    )
+    return df
 def _relabel_update_category(version_df: pd.DataFrame) -> pd.DataFrame:
     """
     Recompute update_category from release_notes using current CATEGORY_RULES.
@@ -209,10 +234,14 @@ def _apply_normalized_workbook_openpyxl_formatting(xlsx_path: Path) -> None:
                 hdr_map[str(v)] = c
         rn_ci = hdr_map.get("release_notes")
         notes_ci = hdr_map.get("notes")
-        url_ci = hdr_map.get("listing_source_url")
+        summ_ci = hdr_map.get("update_summary")
+        url_cols_ci = [
+            hdr_map.get("listing_source_url"),
+            hdr_map.get("history_source_url"),
+        ]
 
         for c in range(1, ws.max_column + 1):
-            cap = 60.0 if c in {rn_ci, notes_ci} else None
+            cap = 60.0 if c in {rn_ci, notes_ci, summ_ci} else None
             ws.column_dimensions[get_column_letter(c)].width = _col_display_width(ws, c, cap=cap)
 
         def _dim_width(col_idx: int | None, *, default: float = 50.0) -> float:
@@ -223,6 +252,7 @@ def _apply_normalized_workbook_openpyxl_formatting(xlsx_path: Path) -> None:
 
         w_rn = _dim_width(rn_ci)
         w_notes = _dim_width(notes_ci)
+        w_summ = _dim_width(summ_ci, default=48.0)
 
         for r in range(1, ws.max_row + 1):
             for c in range(1, ws.max_column + 1):
@@ -233,7 +263,7 @@ def _apply_normalized_workbook_openpyxl_formatting(xlsx_path: Path) -> None:
                     cell.alignment = AL_NOWRAP_TOP
                 else:
                     cell.fill = FILL_WHITE if r % 2 == 0 else FILL_ALT
-                    if c == rn_ci or c == notes_ci:
+                    if c == rn_ci or c == notes_ci or c == summ_ci:
                         cell.alignment = AL_WRAP_TOP
                     else:
                         cell.alignment = AL_NOWRAP_TOP
@@ -251,9 +281,16 @@ def _apply_normalized_workbook_openpyxl_formatting(xlsx_path: Path) -> None:
                         h,
                         _submission_summary_row_height(ws.cell(r, notes_ci).value, col_width=w_notes),
                     )
+                if summ_ci is not None:
+                    h = max(
+                        h,
+                        _submission_summary_row_height(ws.cell(r, summ_ci).value, col_width=w_summ),
+                    )
                 ws.row_dimensions[r].height = min(float(h), 240.0)
 
-        if url_ci is not None:
+        for url_ci in url_cols_ci:
+            if url_ci is None:
+                continue
             for r in range(2, ws.max_row + 1):
                 cell = ws.cell(r, url_ci)
                 raw = cell.value
@@ -371,8 +408,16 @@ def export_workbook_bundle(
     """
     import run_pipeline as rp  # For reporting helpers + schema_text.
 
+    version_df = _fix_mojibake_release_notes(version_df)
     version_df, contam_n = _sanitize_android_release_notes_contamination(version_df)
     version_df = _relabel_update_category(version_df)
+    version_df = version_df.copy()
+    if "history_source_url" not in version_df.columns:
+        version_df["history_source_url"] = ""
+    else:
+        version_df["history_source_url"] = (
+            version_df["history_source_url"].fillna("").astype(str).map(lambda x: x.strip())
+        )
     validate_frames(master_df, version_df)
     output_dir.mkdir(parents=True, exist_ok=True)
 

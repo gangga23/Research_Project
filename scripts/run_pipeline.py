@@ -58,6 +58,9 @@ ALLOWED_CONFIDENCE = frozenset({"high", "medium", "low"})
 UPDATE_CATEGORIES: tuple[str, ...] = (
     "Bug fixes / performance improvements",
     "UI / design changes",
+    "Creator tools / content features",
+    "Localization / languages",
+    "Enterprise / admin features",
     "Privacy / data policy changes",
     "AI-related features",
     "Payments / monetization",
@@ -73,10 +76,21 @@ CATEGORY_RULES: list[tuple[str, tuple[re.Pattern[str], ...]]] = [
     ("Security / account safety", (re.compile(r"\b(security|password|2fa|two-factor|fraud|verify account|login|auth)\b", re.I),)),
     # Avoid over-labeling from "privacy statement" footer links; require a policy/update/tracking/data cue.
     ("Privacy / data policy changes", (re.compile(r"\b(privacy policy|data policy|tracking|gdpr|personal data|privacy (update|updates|changes?|settings?))\b", re.I),)),
+    (
+        "Enterprise / admin features",
+        (
+            re.compile(
+                r"\b(admin|admins|enterprise|org(?:anization)?|workspace admin|controls? for admins|permissions?|"
+                r"roles?|audit|compliance|sso|scim|governance)\b",
+                re.I,
+            ),
+        ),
+    ),
     ("Payments / monetization", (
         re.compile(
             r"\b(subscribe|subscription|billing|wallet|iap|in-app purchase|checkout|purchase|pricing plan|"
-            r"premium\b|paywall|recurring payment|renewal|\btrial\b|upgrade to premium)\b",
+            r"premium\b|paywall|recurring payment|renewal|\btrial\b|upgrade to premium|cash back|cashback|"
+            r"rewards?|offers?)\b",
             re.I,
         ),
     )),
@@ -88,24 +102,83 @@ CATEGORY_RULES: list[tuple[str, tuple[re.Pattern[str], ...]]] = [
                 r"machine learning)\b|\bml\b",
                 re.I,
             ),
+            re.compile(r"\b(agent|agents)\b", re.I),
+            re.compile(r"\b(opus)\b", re.I),
         ),
     ),
-    ("SDK / API / developer integration", (re.compile(r"\b(sdk|api|integration|developer)\b", re.I),)),
+    (
+        "SDK / API / developer integration",
+        (
+            re.compile(r"\b(sdk|api|integration|developer|oauth|webhook)\b", re.I),
+            # Common enterprise integrations referenced in release notes
+            re.compile(r"\b(slack|salesforce|asana|github|jira|zapier)\b", re.I),
+        ),
+    ),
     # Before generic marketing ("introducing", broad availability copy) so fix/crash language wins.
     (
         "Bug fixes / performance improvements",
         (
             re.compile(
                 r"\b(bug|bugs|fix|fixes|fixed|fixing|crash(?:ed|es)?|stability|performance|slow|freeze|hotfix|patch|"
-                r"resolved|mitigate|optimized|optimizations?|rollback)\b",
+                r"resolved|mitigate|optimized|optimizations?|rollback|faster|speed|latency)\b",
+                re.I,
+            ),
+            # Common vague-but-non-feature boilerplate used by some apps (e.g. Spotify).
+            re.compile(r"\b(changes and improvements|improvements and fixes)\b", re.I),
+            # Netflix frequently uses "player improvements" phrasing.
+            re.compile(r"\bplayer improvements?\b", re.I),
+            # Netflix also uses "playback improvements" wording.
+            re.compile(r"\bplayback improvements?\b", re.I),
+            # Notion-style minimal changelog phrasing.
+            re.compile(r"\bimproving the basics\b", re.I),
+        ),
+    ),
+    (
+        "Localization / languages",
+        (
+            re.compile(
+                r"\b(new languages?|in \d+ new languages?|locali[sz]ation|translated|translation|"
+                r"language support|internationali[sz]ation|i18n)\b",
                 re.I,
             ),
         ),
     ),
-    ("UI / design changes", (re.compile(r"\b(ui|design|layout|dark mode|theme|interface|visual)\b", re.I),)),
+    (
+        "Creator tools / content features",
+        (
+            re.compile(
+                r"\b(sticker|stickers|filter|filters|effect|effects|lens|lenses|template|templates|"
+                r"caption|captions|subtitle|subtitles|edit(?:ing)?|editor|camera|video|reels|story|stories|"
+                r"upload|post|posting|share|sharing|clip|clips|shoot videos?)\b",
+                re.I,
+            ),
+            # Lightweight social creation interactions
+            re.compile(r"\b(tag your friends?|tag friends?)\b", re.I),
+            re.compile(r"\bcomments?\b", re.I),
+        ),
+    ),
+    (
+        "UI / design changes",
+        (
+            re.compile(r"\b(ui|design|layout|dark mode|theme|interface|visual)\b", re.I),
+            # Netflix gallery UI note
+            re.compile(r"\bgallery improvements?\b", re.I),
+        ),
+    ),
     ("Personalization / recommendations", (re.compile(r"\b(recommend|recommending|personali[sz]e|for you|discover feed|suggested|profiles?)\b", re.I),)),
     # Narrow vs older rule: drop easy false positives ("now available", "profiles") that stole labels from Bug/UI.
-    ("New product feature", (re.compile(r"\b(new feature|introducing|now you can|added support|launches|new:|download|offline|rent)\b", re.I),)),
+    (
+        "New product feature",
+        (
+            re.compile(
+                r"\b(new feature|introducing|now you can|added support|launches|new:|download|offline|rent|"
+                r"\bmail\b|\bcalendar\b|forms?\b|rollups?\b|dashboard views?\b|tabs?\b|discussions?\b|library\b|"
+                r"teamspaces?\b|comment reactions?\b|progress bars?\b|simple tables?\b|automate workflows?\b|"
+                r"automations?\b)\b",
+                re.I,
+            ),
+        ),
+    ),
 ]
 
 
@@ -127,13 +200,40 @@ def stable_app_id(app_name: str, platform: str) -> str:
     return f"{base}_{plat}"
 
 
+def _fix_mojibake_punct(text: str) -> str:
+    """
+    Repair common Windows-1252/UTF-8 mojibake seen in store release notes, e.g.:
+    "Weâ€™re" -> "We’re".
+    """
+    if not text:
+        return ""
+    # Fast path: only touch strings that show telltale sequences.
+    if "â" not in text and "Ã" not in text:
+        return text
+    repl = {
+        "â€™": "’",
+        "â€˜": "‘",
+        "â€œ": "“",
+        "â€�": "”",
+        "â€“": "–",
+        "â€”": "—",
+        "â€¦": "…",
+        "Â ": " ",
+        "Â": "",
+    }
+    out = text
+    for a, b in repl.items():
+        out = out.replace(a, b)
+    return out
+
+
 def strip_html(text: str) -> str:
     if not text:
         return ""
     t = html.unescape(text)
     t = re.sub(r"<[^>]+>", " ", t)
     t = re.sub(r"\s+", " ", t).strip()
-    return t
+    return _fix_mojibake_punct(t)
 
 
 def strip_marketing_lines(text: str) -> str:
@@ -309,6 +409,7 @@ def build_ios_version_rows(cfg: dict, ios: dict, country: str = "us") -> list[di
     name = cfg["app_name"]
     ios_id = int(cfg["ios_app_id"])
     rows: list[dict] = []
+    product_url = app_store_product_url(ios_id, country=country)
 
     MIN_LIVE_ROWS_FOR_WAYBACK_FALLBACK = 15
 
@@ -337,6 +438,7 @@ def build_ios_version_rows(cfg: dict, ios: dict, country: str = "us") -> list[di
                     "source_type": "app_store_web",
                     "confidence_level": "high",
                     "update_category": cat,
+                    "history_source_url": product_url,
                 }
             )
         return rows
@@ -351,10 +453,9 @@ def build_ios_version_rows(cfg: dict, ios: dict, country: str = "us") -> list[di
             if v and d:
                 seen.add((v, d))
 
-        url = app_store_product_url(ios_id, country=country)
         added = 0
-        for ts in wayback_list_timestamps(url, max_results=60):
-            wh = wayback_fetch_html(ts, url)
+        for ts in wayback_list_timestamps(product_url, max_results=60):
+            wh = wayback_fetch_html(ts, product_url)
             if not wh:
                 continue
             try:
@@ -409,6 +510,7 @@ def build_ios_version_rows(cfg: dict, ios: dict, country: str = "us") -> list[di
                     "source_type": "app_store_web",
                     "confidence_level": "high",
                     "update_category": cat,
+                    "history_source_url": product_url,
                 }
             )
         return rows
@@ -427,6 +529,7 @@ def build_ios_version_rows(cfg: dict, ios: dict, country: str = "us") -> list[di
             "source_type": "app_store_web",
             "confidence_level": "medium",
             "update_category": cat,
+            "history_source_url": product_url,
         }
     )
     return rows
@@ -437,7 +540,8 @@ def schema_text() -> str:
   app_id, app_name, platform, developer, category, initial_release_date,
   version_number, release_date, is_current_version (Yes | No | Unknown),
   store_current_version, store_current_version_release_date, listing_source_url,
-  release_notes, update_category, source_type, confidence_level, notes
+  history_source_url (Wayback capture, feed entry link, or live store listing URL for this row),
+  release_notes, update_category, update_summary, source_type, confidence_level, notes
 
 TABLE app_master
   app_id, app_name, platform, developer, category, initial_release_date,
@@ -448,6 +552,7 @@ TABLE app_version_history
   version_number (empty string when unknown; never fabricated)
   release_date (ISO YYYY-MM-DD or empty)
   release_notes (cleaned; Not available when absent)
+  history_source_url (best URL for this observation: archived listing, RSS item link, or live listing)
   source_type (strict):
     - play_store_snapshot | wayback_snapshot | developer_changelog |
       feature_signal | review_inferred (Android)
@@ -612,6 +717,7 @@ def main() -> int:
         "version_number",
         "release_date",
         "release_notes",
+        "history_source_url",
         "source_type",
         "confidence_level",
         "update_category",

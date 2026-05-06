@@ -246,7 +246,8 @@ def _chart_update_frequency_heatmap_platform(
     )
     im = ax.imshow(mat, aspect="auto", cmap=_cadence_heatmap_colormap(), vmin=0, vmax=vm)
     cbar_extend = "max" if float(mat.max()) > vm + 1e-9 else "neither"
-    ax.set_title(title, fontsize=fs_title, pad=18)
+    # Keep titles aligned so tight-cropping doesn't produce different PNG geometry per platform.
+    ax.set_title(title, fontsize=fs_title, pad=14)
     ax.text(
         0.0,
         1.01,
@@ -259,7 +260,7 @@ def _chart_update_frequency_heatmap_platform(
     )
 
     ax.set_xlabel("Quarter" if bin_period == "Q" else "Year" if bin_period == "Y" else "Month", fontsize=fs_axis)
-    ax.set_ylabel("App")
+    ax.set_ylabel("App", fontsize=fs_axis)
     ax.set_yticks(np.arange(len(apps)))
     ax.set_yticklabels(apps, fontsize=fs_tick_y)
     nxb = len(xlabels)
@@ -272,16 +273,17 @@ def _chart_update_frequency_heatmap_platform(
     nticks = min(5, max(2, int(math.ceil(vm)) + 1))
     cbar.set_ticks(np.linspace(0.0, float(vm), num=nticks))
     cbar.ax.tick_params(labelsize=int(fs_cbar * 0.9))
-    fig.tight_layout()
+    # Fixed margins + no bbox_inches='tight' => consistent PNG geometry for iOS/Android.
+    fig.subplots_adjust(left=0.23, right=0.985, top=0.88, bottom=0.18)
     buf = io.BytesIO()
     fig.savefig(
         buf,
         format="png",
         dpi=115,
-        bbox_inches="tight",
+        bbox_inches=None,
         facecolor="#ffffff",
         edgecolor="none",
-        pad_inches=0.12,
+        pad_inches=0.0,
     )
     plt.close(fig)
     buf.seek(0)
@@ -354,13 +356,12 @@ def _chart_update_frequency_heatmap(version_df: pd.DataFrame) -> io.BytesIO | No
     return buf
 
 def _chart_category_evolution_quartile_buckets(version_df: pd.DataFrame) -> io.BytesIO | None:
-    """Oldest vs newest dated quartile — slope chart for Bug / AI / Payments (Other in caption only)."""
+    """Oldest vs newest dated quartile — slope chart for top ``update_category`` labels (from run_pipeline taxonomy)."""
     import matplotlib.pyplot as plt
+    import matplotlib as mpl
     import numpy as np
 
-    BUG = "Bug fixes / performance improvements"
-    AI = "AI-related features"
-    PAY = "Payments / monetization"
+    import run_pipeline as rp
 
     sub = dated_subset(version_df)
     if sub is None or len(sub) < 8:
@@ -384,33 +385,40 @@ def _chart_category_evolution_quartile_buckets(version_df: pd.DataFrame) -> io.B
     o_rng = _fmt_rng(oldest)
     n_rng = _fmt_rng(newest)
 
-    def bucket(arr):
-        out: list[str] = []
-        for c in arr:
-            cs = str(c)
-            if cs == BUG:
-                out.append(BUG)
-            elif cs == AI:
-                out.append(AI)
-            elif cs == PAY:
-                out.append(PAY)
-            else:
-                out.append("Other")
-        return out
+    cat_allowed = set(rp.UPDATE_CATEGORIES)
 
-    oldest["_bk"] = bucket(oldest["update_category"])
-    newest["_bk"] = bucket(newest["update_category"])
-    keys = [BUG, AI, PAY]
-    short = ["Bug fixes / performance", "AI-related", "Payments"]
-    palette = ["#c0504d", "#4f81bd", "#9bbb59"]
-    other_old = 100.0 * float((oldest["_bk"] == "Other").sum()) / float(max(len(oldest), 1))
-    other_new = 100.0 * float((newest["_bk"] == "Other").sum()) / float(max(len(newest), 1))
+    def _norm_cat(x: object) -> str:
+        c = str(x).strip()
+        return c if c in cat_allowed else "Other"
 
-    def share_bk(frame: pd.DataFrame, key: str) -> float:
+    oldest["_bk"] = oldest["update_category"].map(_norm_cat)
+    newest["_bk"] = newest["update_category"].map(_norm_cat)
+
+    cats_all: tuple[str, ...] = rp.UPDATE_CATEGORIES
+
+    def _share_quartile(frame: pd.DataFrame, key: str) -> float:
         return 100.0 * float((frame["_bk"] == key).sum()) / float(max(len(frame), 1))
 
-    o_share = [share_bk(oldest, k) for k in keys]
-    n_share = [share_bk(newest, k) for k in keys]
+    shares_old = {c: _share_quartile(oldest, c) for c in cats_all}
+    shares_new = {c: _share_quartile(newest, c) for c in cats_all}
+
+    # Plot top-K buckets so all taxonomy buckets can surface without overcrowding.
+    K = 6
+    ranked = sorted(cats_all, key=lambda c: max(shares_old[c], shares_new[c]), reverse=True)
+    keys = ranked[:K]
+    remainder_old = max(0.0, 100.0 - sum(shares_old[c] for c in keys))
+    remainder_new = max(0.0, 100.0 - sum(shares_new[c] for c in keys))
+
+    def _legend_label(full: str) -> str:
+        s = full.replace(" / ", "/")
+        return s if len(s) <= 42 else s[:39] + "…"
+
+    short = [_legend_label(k) for k in keys]
+    tab = mpl.colormaps["tab10"]
+    palette = [tab(i % 10) for i in range(len(keys))]
+
+    o_share = [shares_old[k] for k in keys]
+    n_share = [shares_new[k] for k in keys]
 
     def _slope_endpoint_dy_pt(vals: list[float], *, spread: float = 28.0) -> list[float]:
         """Spread endpoint labels vertically (points); widening avoids collisions on dense slopes."""
@@ -453,7 +461,7 @@ def _chart_category_evolution_quartile_buckets(version_df: pd.DataFrame) -> io.B
     fig, ax = plt.subplots(figsize=(8.2, 5.45))
     fig.patch.set_facecolor("#ffffff")
     ax.set_facecolor("#ffffff")
-    fig.subplots_adjust(left=0.13, right=0.94, top=0.72, bottom=0.26)
+    fig.subplots_adjust(left=0.13, right=0.94, top=0.76, bottom=0.26)
 
     import matplotlib.patheffects as pe
 
@@ -464,8 +472,8 @@ def _chart_category_evolution_quartile_buckets(version_df: pd.DataFrame) -> io.B
     xs = np.array([0.0, 1.0])
     for idx, (label, color) in enumerate(zip(short, palette)):
         yo, yn = float(o_share[idx]), float(n_share[idx])
-        lx_pad = -52 - idx * 12
-        rx_pad = 20 + idx * 12
+        lx_pad = -54 - idx * 10
+        rx_pad = 22 + idx * 10
         ax.plot(
             xs,
             [yo, yn],
@@ -538,7 +546,7 @@ def _chart_category_evolution_quartile_buckets(version_df: pd.DataFrame) -> io.B
     ax.legend(
         loc="upper right",
         bbox_to_anchor=(0.99, 0.99),
-        ncol=1,
+        ncol=2 if len(keys) >= 5 else 1,
         fontsize=fs_leg,
         frameon=True,
         fancybox=True,
@@ -560,7 +568,8 @@ def _chart_category_evolution_quartile_buckets(version_df: pd.DataFrame) -> io.B
     fig.text(
         0.13,
         0.895,
-        f"Lines omit Other — Other share: {other_old:.0f}% (oldest), {other_new:.0f}% (newest).",
+        f"Top {len(keys)} categories by max(quartile share); remainder not drawn: "
+        f"{remainder_old:.0f}% (oldest), {remainder_new:.0f}% (newest).",
         fontsize=12,
         color="#5c6575",
         va="top",
@@ -643,7 +652,7 @@ def build_explanatory_questions(version_df: pd.DataFrame) -> list[str]:
     static = [
         "Which apps show accelerating vs decelerating update cadence (heatmap), and does that coincide with major platform policy events?",
         "Is Android depth shallow for specific apps (span chart) — suggesting missing captures rather than true inactivity?",
-        "In the quartile category chart, do bug-fix / AI / payments shifts reflect disclosure strategy (templated copy) or real content change? Validate using high-confidence provenance subsets.",
+        "In the quartile category chart, do headline bucket shifts reflect disclosure strategy (templated copy) or real content change? Validate using high-confidence provenance subsets.",
     ]
     dynamic: list[str] = []
     n = len(version_df)
@@ -711,6 +720,12 @@ def append_visualization_sheet(xlsx_path: Path, version_df: pd.DataFrame) -> Non
         wb.remove(wb[_SHEET])
     ws = wb.create_sheet(_SHEET)
 
+    # Readability defaults (Excel renders images/text better with predictable widths).
+    ws.column_dimensions["A"].width = 44.0
+    for col in "BCDEFGHIJ":
+        ws.column_dimensions[col].width = 14.0
+    ws.freeze_panes = "A5"
+
     ws["A1"] = "Visualization (Quick Scans)"
     ws["A1"].font = Font(bold=True, size=14)
     ws.merge_cells("A1:J1")
@@ -726,7 +741,7 @@ def append_visualization_sheet(xlsx_path: Path, version_df: pd.DataFrame) -> Non
     )
     ws["A3"].alignment = Alignment(wrap_text=True, vertical="top")
     ws.merge_cells("A3:J4")
-    ws.row_dimensions[3].height = 42
+    ws.row_dimensions[3].height = 54
 
     ws["A5"] = "Automated trend synopsis (quick read)"
     ws["A5"].font = Font(bold=True, size=11)
@@ -734,7 +749,7 @@ def append_visualization_sheet(xlsx_path: Path, version_df: pd.DataFrame) -> Non
     ws["A6"] = synopsis
     ws["A6"].alignment = Alignment(wrap_text=True, vertical="top")
     ws.merge_cells("A6:J13")
-    ws.row_dimensions[6].height = 180
+    ws.row_dimensions[6].height = 220
 
     app_order = sorted(version_df["app_name"].fillna("").astype(str).unique().tolist())
     app_order = [a for a in app_order if a]
@@ -784,10 +799,9 @@ def append_visualization_sheet(xlsx_path: Path, version_df: pd.DataFrame) -> Non
             app_order=app_order,
             max_bins=30,
             bin_period="M",
-            title="iOS update frequency over time by app (heatmap)",
+            title="Cadence heatmap (monthly) — iOS",
             subtitle=(
-                "iOS only | app_store_web source | high confidence | monthly from 2020, last 30 months shown | "
-                "per-bin counts; cap 20 (triangle if above)"
+                "iOS | monthly since 2020 (last 30 months) | per-bin counts | shared color scale (cap 20)"
             ),
             vmax=shared_vmax,
             prepared=ios_p,
@@ -808,10 +822,9 @@ def append_visualization_sheet(xlsx_path: Path, version_df: pd.DataFrame) -> Non
             app_order=app_order,
             max_bins=30,
             bin_period="M",
-            title="Android update frequency over time by app (heatmap)",
+            title="Cadence heatmap (monthly) — Android",
             subtitle=(
-                "Android only | monthly from 2020 (empty months = no dated capture in slice) | mixed sources — "
-                "same month axis & color scale as iOS (per-bin counts; cap 20, triangle = values above cap)"
+                "Android | monthly since 2020 (last 30 months) | per-bin counts | shared color scale (cap 20)"
             ),
             vmax=shared_vmax,
             prepared=and_p,

@@ -59,6 +59,19 @@ def _clean_notes(raw: str | None, max_len: int = 4000) -> str:
     t = unescape(str(raw))
     t = re.sub(r"<[^>]+>", " ", t)
     t = re.sub(r"\s+", " ", t).strip()
+    # Fix common mojibake punctuation (UTF-8 decoded as cp1252), e.g. â€™ -> ’.
+    if "â" in t or "Ã" in t:
+        t = (
+            t.replace("â€™", "’")
+            .replace("â€˜", "‘")
+            .replace("â€œ", "“")
+            .replace("â€�", "”")
+            .replace("â€“", "–")
+            .replace("â€”", "—")
+            .replace("â€¦", "…")
+            .replace("Â ", " ")
+            .replace("Â", "")
+        )
     if not t:
         return "Not available"
     return t[:max_len]
@@ -166,9 +179,16 @@ def wayback_timestamps_merged(package_id: str, *, max_per_pattern: int = 45) -> 
     return uniq
 
 
+def play_store_listing_url(package_id: str) -> str:
+    return f"https://play.google.com/store/apps/details?id={package_id}&hl=en&gl=us"
+
+
+def android_wayback_capture_url(timestamp: str, package_id: str) -> str:
+    return f"https://web.archive.org/web/{timestamp}id_/{play_store_listing_url(package_id)}"
+
+
 def wayback_fetch_html(timestamp: str, package_id: str) -> str | None:
-    live = f"https://play.google.com/store/apps/details?id={package_id}&hl=en&gl=us"
-    url = f"https://web.archive.org/web/{timestamp}id_/{live}"
+    url = android_wayback_capture_url(timestamp, package_id)
     try:
         r = requests.get(
             url,
@@ -187,6 +207,14 @@ def _ts_to_date(ts: str) -> str:
         y, m, d = int(ts[:4]), int(ts[4:6]), int(ts[6:8])
         return f"{y:04d}-{m:02d}-{d:02d}"
     return ""
+
+
+def _feed_entry_history_url(ent: dict[str, Any], fallback_feed: str) -> str:
+    link = (ent.get("link") or "").strip()
+    if link.startswith(("http://", "https://")):
+        return link
+    fb = (fallback_feed or "").strip()
+    return fb if fb.startswith(("http://", "https://")) else ""
 
 
 def _registrable_host(url: str | None) -> str | None:
@@ -280,6 +308,7 @@ def developer_feed_rows_from_url(
 
         ent_d: dict[str, Any] = ent if isinstance(ent, dict) else dict(ent)
         is_version_row = feed_type == "release_feed" and entry_qualifies_for_version_row(feed_type, ent_d)
+        hist_url = _feed_entry_history_url(ent_d, feed_url)
         if is_version_row:
             rows.append(
                 {
@@ -292,6 +321,7 @@ def developer_feed_rows_from_url(
                     "source_type": "developer_changelog",
                     "confidence_level": conf_ver,
                     "update_category": categorize_fn(text),
+                    "history_source_url": hist_url,
                 }
             )
         else:
@@ -306,6 +336,7 @@ def developer_feed_rows_from_url(
                     "source_type": "feature_signal",
                     "confidence_level": "low",
                     "update_category": categorize_fn(text),
+                    "history_source_url": hist_url,
                 }
             )
 
@@ -381,6 +412,7 @@ def build_android_history_rows(
     concrete_ver = bool(ver_play and re.match(r"^\d+(\.\d+)+", ver_play))
     structured = (notes_primary != "Not available") or concrete_ver
 
+    listing_u = play_store_listing_url(package_id)
     rows.append(
         {
             "app_id": app_id,
@@ -392,6 +424,7 @@ def build_android_history_rows(
             "source_type": "play_store_snapshot",
             "confidence_level": "high",
             "update_category": categorize_fn(notes_primary),
+            "history_source_url": listing_u,
         }
     )
 
@@ -425,6 +458,7 @@ def build_android_history_rows(
                 "source_type": "wayback_snapshot",
                 "confidence_level": "medium",
                 "update_category": categorize_fn(wnotes),
+                "history_source_url": android_wayback_capture_url(ts, package_id),
             }
         )
         time.sleep(0.22)
@@ -482,6 +516,7 @@ def build_android_history_rows(
                     "source_type": "review_inferred",
                     "confidence_level": "low",
                     "update_category": "Other",
+                    "history_source_url": listing_u,
                 }
             )
 

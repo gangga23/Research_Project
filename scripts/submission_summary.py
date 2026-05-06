@@ -88,9 +88,9 @@ def challenges_block(version_df: pd.DataFrame) -> str:
         "• Coverage asymmetry: Android lacks a public multi-version changelog API comparable to the App Store web "
         "embed; longitudinal depth depends on Wayback, feeds, and bounded review inference.\n\n"
         f"• Android version_number is blank for {miss_ver:.0f}% of observations — genuine disclosure limits "
-        "(Wayback snapshots, Play variant listings), not fabricated fillers. Use submission_observations » notes "
-        "for row-level missing-data and caveats; exclude sparse-version rows from strict semver sequencing but retain "
-        "for cadence/category reads.\n\n"
+        "(Wayback snapshots, Play variant listings), not fabricated fillers. submission_observations » notes flags "
+        "fabrication policy, Wayback date caveat, Play variant listings, and scrape anomalies only; exclude sparse-version "
+        "rows from strict semver sequencing but retain for cadence/category reads.\n\n"
         "• Layout drift: Play/App Store HTML and JSON shapes change; heuristics need maintenance.\n\n"
         "• Wayback: uneven capture by app/period; CDX/network noise reduces snapshots without failing the run.\n\n"
         "• RSS gates: semver/date rules limit false version rows but split vendor narrative across "
@@ -394,50 +394,129 @@ def _is_current_cell(row: pd.Series) -> str:
 
 
 def _observation_notes(row: pd.Series) -> str:
-    """Row-level notes: provenance, missing fields, store caveats, pipeline defenses (confidence_level stays its own column)."""
+    """DQ-only notes (pipe-separated). Does not duplicate release_notes or source_type columns."""
     parts: list[str] = []
-    parts.append(f"provenance={row.get('source_type', '')}")
 
     vn = row.get("version_number")
     vn_s = "" if vn is None or (isinstance(vn, float) and pd.isna(vn)) else str(vn).strip()
     if not vn_s:
-        parts.append("version_number missing (not provided by source; not fabricated)")
-
-    rd = row.get("release_date")
-    if rd is None or (isinstance(rd, float) and pd.isna(rd)) or str(rd).strip() in ("", "nan", "NaT"):
-        parts.append("release_date missing")
-
-    rn = str(row.get("release_notes") or "").strip()
-    if not rn or rn == "Not available":
-        parts.append("release_notes unavailable")
+        parts.append("version_number missing (not fabricated)")
 
     cv = row.get("store_current_version")
     cv_s = "" if cv is None or (isinstance(cv, float) and pd.isna(cv)) else str(cv).strip()
-    if not cv_s:
-        parts.append("store_current_version missing on listing snapshot")
-    elif cv_s.lower() == "varies with device":
-        parts.append(
-            "store_current_version is Varies with device (multiple APK variants; no single semantic-version string comparable)"
-        )
+    if cv_s.lower() == "varies with device":
+        parts.append("Play Store serves device-dependent variants")
 
-    icv = str(row.get("is_current_version") or "").strip()
-    if icv == "Unknown" and vn_s and cv_s and cv_s.lower() != "varies with device":
-        parts.append("is_current_version Unknown — observation version does not match store listing snapshot")
-
-    pipe = str(row.get("_dq_pipeline_note") or "").strip()
-    if pipe:
-        parts.append(pipe)
-
-    app = str(row.get("app_name") or "").strip().lower()
-    plat = str(row.get("platform") or "").strip()
     st = str(row.get("source_type") or "").strip()
-    if app == "notion" and plat == "Android" and st in {"developer_changelog", "feature_signal"}:
-        parts.append(
-            "Notion Android: changelog lines ingested from vendor RSS; semver/date gates apply — "
-            "see methodology and feed_validation_report."
-        )
+    if st == "wayback_snapshot":
+        parts.append("archive date; not verified ship date")
 
-    return "; ".join(parts)
+    dq = str(row.get("_dq_pipeline_note") or "").strip()
+    if dq:
+        parts.append(dq)
+
+    return " | ".join(parts)
+
+
+def _standardized_update_summary(row: pd.Series) -> str:
+    """
+    Format: {short_code}:{primary_descriptor}
+    Examples: bugfix:stability, ai:search_feature, feature:darkmode, privacy:att_compliance, no_release_notes
+    """
+    cat = str(row.get("update_category") or "").strip()
+    rn = str(row.get("release_notes") or "").strip()
+    if not rn or rn == "Not available":
+        return "no_release_notes"
+
+    cat_l = cat.lower()
+    code = "other"
+    if "bug fixes" in cat_l or "performance" in cat_l:
+        code = "bugfix"
+    elif cat_l.startswith("ui"):
+        code = "ui"
+    elif "creator tools" in cat_l or "content" in cat_l:
+        code = "content"
+    elif "localization" in cat_l or "languages" in cat_l:
+        code = "localization"
+    elif "enterprise" in cat_l or "admin" in cat_l:
+        code = "enterprise"
+    elif cat_l.startswith("privacy"):
+        code = "privacy"
+    elif cat_l.startswith("ai"):
+        code = "ai"
+    elif cat_l.startswith("payments"):
+        code = "payments"
+    elif cat_l.startswith("personalization"):
+        code = "recs"
+    elif cat_l.startswith("security"):
+        code = "security"
+    elif cat_l.startswith("sdk"):
+        code = "sdk"
+    elif cat_l.startswith("new product feature"):
+        code = "feature"
+
+    # One best descriptor from release_notes (single string).
+    desc_rules: list[tuple[str, re.Pattern[str]]] = [
+        # Privacy / compliance
+        ("att_compliance", re.compile(r"\batt\b|app tracking transparency|tracking transparency", re.I)),
+        ("gdpr_compliance", re.compile(r"\bgdpr\b", re.I)),
+        ("tracking_controls", re.compile(r"\btracking\b|track(?:er|ers)?", re.I)),
+        ("privacy_policy", re.compile(r"privacy policy|data policy|privacy update|privacy changes?", re.I)),
+        # Security
+        ("two_factor_auth", re.compile(r"\b2fa\b|two-factor|two factor", re.I)),
+        ("password_security", re.compile(r"\bpassword\b", re.I)),
+        ("login_auth", re.compile(r"\blogin\b|\bauth\b|authentication", re.I)),
+        ("fraud_protection", re.compile(r"\bfraud\b|phishing|scam", re.I)),
+        # AI
+        ("agent_feature", re.compile(r"\bagents?\b", re.I)),
+        ("gpt_feature", re.compile(r"\bgpt\b|chatgpt|openai", re.I)),
+        ("genai_feature", re.compile(r"\bgenerative\b|\bllm\b", re.I)),
+        ("ai_search", re.compile(r"\bai\b.*\bsearch\b|\bsearch\b.*\bai\b", re.I)),
+        # Payments
+        ("cashback_offers", re.compile(r"cash ?back|rewards?|offers?", re.I)),
+        ("subscription", re.compile(r"subscribe|subscription|renewal|trial", re.I)),
+        ("checkout_payment", re.compile(r"checkout|purchase|billing|wallet|paywall|premium", re.I)),
+        # Performance / bugfix
+        ("stability", re.compile(r"\bstability\b|reliab", re.I)),
+        ("crash_fix", re.compile(r"\bcrash\b", re.I)),
+        ("performance", re.compile(r"\bperformance\b|faster|speed|latency|optimized?", re.I)),
+        ("playback", re.compile(r"\bplayback\b|\bplayer\b", re.I)),
+        ("bug_fix", re.compile(r"\bbug\b|\bfix(?:ed|es|ing)?\b", re.I)),
+        # UI
+        ("darkmode", re.compile(r"dark mode|dark theme", re.I)),
+        ("gallery_ui", re.compile(r"\bgallery\b", re.I)),
+        ("navigation_ui", re.compile(r"\bnavigation\b|tabs?\b|sidebar\b|home\b", re.I)),
+        ("design_refresh", re.compile(r"\bdesign\b|\blayout\b|\binterface\b|\bui\b", re.I)),
+        # Content creation
+        ("stickers", re.compile(r"\bstickers?\b", re.I)),
+        ("filters_effects", re.compile(r"\bfilters?\b|\beffects?\b|\blenses?\b", re.I)),
+        ("video_editing", re.compile(r"\bedit(?:ing)?\b|editor|shoot videos?|camera", re.I)),
+        ("sharing_comments", re.compile(r"\bshare\b|comments?\b|tag (?:your )?friends?\b", re.I)),
+        # Enterprise/admin
+        ("admin_controls", re.compile(r"controls? for admins?|workspace admin|admin", re.I)),
+        ("permissions_roles", re.compile(r"permissions?|roles?", re.I)),
+        ("sso_scim", re.compile(r"\bsso\b|\bscim\b", re.I)),
+        # Localization
+        ("new_languages", re.compile(r"new languages?|in \d+ new languages?", re.I)),
+        ("translation", re.compile(r"translated|translation|locali[sz]ation|i18n", re.I)),
+        # Product features
+        ("automations", re.compile(r"automations?|automate workflows?", re.I)),
+        ("mail_calendar", re.compile(r"\bmail\b|\bcalendar\b|schedule meetings", re.I)),
+        ("forms", re.compile(r"\bforms?\b", re.I)),
+        ("tables", re.compile(r"\btables?\b|simple tables", re.I)),
+        ("teamspaces", re.compile(r"\bteamspaces?\b", re.I)),
+        ("progress_bars", re.compile(r"\bprogress bars?\b", re.I)),
+        ("integrations", re.compile(r"\bintegration\b|slack|salesforce|asana|github|jira|zapier", re.I)),
+        ("new_feature", re.compile(r"\bnew feature\b|introducing|now you can|added support|launch", re.I)),
+    ]
+
+    descriptor = "other"
+    for d, p in desc_rules:
+        if p.search(rn):
+            descriptor = d
+            break
+
+    return f"{code}:{descriptor}"
 
 
 SUBMISSION_OBSERVATION_COLUMN_ORDER: tuple[str, ...] = (
@@ -453,8 +532,10 @@ SUBMISSION_OBSERVATION_COLUMN_ORDER: tuple[str, ...] = (
     "store_current_version",
     "store_current_version_release_date",
     "listing_source_url",
+    "history_source_url",
     "release_notes",
     "update_category",
+    "update_summary",
     "source_type",
     "confidence_level",
     "notes",
@@ -485,6 +566,7 @@ def build_submission_observations(version_df: pd.DataFrame, master_df: pd.DataFr
     )
     merged["is_current_version"] = merged.apply(_is_current_cell, axis=1)
     merged["notes"] = merged.apply(_observation_notes, axis=1)
+    merged["update_summary"] = merged.apply(_standardized_update_summary, axis=1)
     if "_dq_pipeline_note" in merged.columns:
         merged = merged.drop(columns=["_dq_pipeline_note"])
     return merged[list(SUBMISSION_OBSERVATION_COLUMN_ORDER)]
@@ -509,8 +591,8 @@ def build_cover_sheet_dataframe(repo_url: str, *, n_apps: int, n_obs: int) -> pd
         "(density / cadence / provenance / quartile trends), challenges + confidence interpretation.\n\n"
         "timeseries_metrics — key counts derived from version history.\n\n"
         "viz_fast_scan — synopsis bullets mirroring Time-series insights; charts 1–5 analytic cuts; charts 6–8 "
-        "Quick-Scan dashboard (stacked year×platform density; selected source_type stacks; quartile bug-fix / AI / "
-        "payments / other) — requires matplotlib.\n\n"
+        "Quick-Scan dashboard (stacked year×platform density; selected source_type stacks; quartile category-share "
+        "slopes for top update_category buckets) — requires matplotlib.\n\n"
         "validation / data_quality / field_schema — pipeline diagnostics and schema reference."
     )
     mapping = (
@@ -523,14 +605,15 @@ def build_cover_sheet_dataframe(repo_url: str, *, n_apps: int, n_obs: int) -> pd
         "Whether this is the current version → is_current_version (Yes | No | Unknown)\n"
         "Initial app release date → initial_release_date\n"
         "Update description / release notes → release_notes\n"
-        "Standardized update category → update_category (single allowed label)\n"
-        "Brief standardized summary for variables → combine update_category with release_notes text in analysis "
-        "(no separate generated summary column)\n"
+        "Standardized update category → update_category (single best-fit label per rubric; multi-signal updates default to primary cue)\n"
+        "Brief standardized summary for variables → update_summary (format short_code:primary_descriptor; full release_notes retained for re-coding)\n"
         "Source URL (store listing; clickable when Excel recognizes https) → listing_source_url\n"
+        "Per-observation history URL (Wayback capture, feed article link, or same listing when no finer URL) "
+        "→ history_source_url\n"
         "Listing snapshot: store-reported current version + date → store_current_version, "
         "store_current_version_release_date\n"
         "Observation provenance → source_type, confidence_level\n"
-        "Data quality, missing fields, caveats → notes"
+        "Data quality flags only (pipe-separated) → notes"
     )
     join_txt = (
         "submission_observations is produced by merging app_version_history with app_master on app_id (stable per "
@@ -538,8 +621,8 @@ def build_cover_sheet_dataframe(repo_url: str, *, n_apps: int, n_obs: int) -> pd
     )
     caveats = (
         "Android observation rows may lack version_number or use archive-backed dates (see source_type). "
-        "submission_observations » notes summarizes provenance, missing values, store caveats (e.g. "
-        "Varies with device), and pipeline defenses (contamination cleanup, vendor RSS caveats)."
+        "submission_observations » notes (pipe-separated): blank version → not fabricated; wayback_snapshot → archive "
+        "date caveat; Varies with device listing → Play variant caveat; plus contamination/anomaly text when present."
     )
     rows = [
         ("Title", "Matched iOS / Android app update history — submission workbook"),

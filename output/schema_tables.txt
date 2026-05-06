@@ -2,7 +2,8 @@ TABLE submission_observations (assignment-aligned denormalized export)
   app_id, app_name, platform, developer, category, initial_release_date,
   version_number, release_date, is_current_version (Yes | No | Unknown),
   store_current_version, store_current_version_release_date, listing_source_url,
-  release_notes, update_category, source_type, confidence_level, notes
+  history_source_url (Wayback capture, feed entry link, or live store listing URL for this row),
+  release_notes, update_category, update_summary, source_type, confidence_level, notes
 
 TABLE app_master
   app_id, app_name, platform, developer, category, initial_release_date,
@@ -13,6 +14,7 @@ TABLE app_version_history
   version_number (empty string when unknown; never fabricated)
   release_date (ISO YYYY-MM-DD or empty)
   release_notes (cleaned; Not available when absent)
+  history_source_url (best URL for this observation: archived listing, RSS item link, or live listing)
   source_type (strict):
     - play_store_snapshot | wayback_snapshot | developer_changelog |
       feature_signal | review_inferred (Android)

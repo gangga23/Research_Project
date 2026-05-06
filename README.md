@@ -50,7 +50,7 @@ Common patterns to try (verify in a browser or with `curl` / `feedparser` before
 | File | Description |
 |------|-------------|
 | `app_master.csv` / `app_version_history.csv` | Core normalized tables |
-| `submission_observations.csv` | Rubric-ready merge (master fields + each version row + `is_current_version`, `notes`) |
+| `submission_observations.csv` | Rubric-ready merge (master fields + each version row + `is_current_version`, `notes`, `update_summary`) |
 | `data_quality_report.txt` | `%` by Android `source_type`, missing Android `version_number` rate, etc. |
 | `feed_validation_report.txt` | Per configured Android feed: auto `feed_type` + signal counts from the sample |
 | `validation_report.txt` | Row counts + embedded data quality block |
