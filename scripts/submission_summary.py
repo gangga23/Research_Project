@@ -37,7 +37,6 @@ def load_repository_url(project_root: Path) -> str:
 
 
 def methodology_block(repo_url: str) -> str:
-    repo_line = repo_url if repo_url else "https://github.com/gangga23/Research_Project"
     return (
         "Automated Python pipelines (no LLM-generated store text).\n\n"
         "• iOS — iTunes Lookup for app_master; multi-version history from App Store product-page HTML "
@@ -54,7 +53,6 @@ def methodology_block(repo_url: str) -> str:
         "iOS Lookup-only fallback when embedded history is thin. Low: vendor RSS/marketing lines classified as "
         "feature_signal (no strict semver/date gate) or review-inferred timing when no stronger structured signal "
         "exists.\n\n"
-        f"Repository:\n{repo_line}"
     )
 
 
@@ -346,10 +344,12 @@ def build_submission_summary_dataframe(
         span = f"{dmin}\u2013{dmax}"
     else:
         span = "n/a"
+    repo_line = repo_url if repo_url else "https://github.com/gangga23/Research_Project"
     overview = (
         f"Cross-platform panel covering {n_config_apps} matched iOS/Android app pairs, {len(version_df)} "
         f"version-history observations spanning {span}. Each row is tied to a verifiable source and confidence level, "
-        "enabling evaluators to subset to high-credibility paths before drawing product or policy inferences."
+        "enabling evaluators to subset to high-credibility paths before drawing product or policy inferences.\n\n"
+        f"Repository: {repo_line}"
     )
     rows = [
         ("Overview", overview),

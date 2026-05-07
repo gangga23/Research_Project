@@ -421,6 +421,12 @@ def export_workbook_bundle(
         version_df = merge_apkmirror_history_urls(version_df, repo_root / "data" / "cache")
     except ImportError:
         pass
+    try:
+        from apkmirror_upload_date import fill_missing_apk_mirror_release_dates
+
+        version_df = fill_missing_apk_mirror_release_dates(version_df)
+    except ImportError:
+        pass
     validate_frames(master_df, version_df)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -478,6 +484,20 @@ def export_workbook_bundle(
         validation_text=rep,
         data_quality_text=dq_txt,
     )
+    # Move viz-sheet reading note into submission_summary » Challenges (keeps workbook scannable).
+    reading_note = (
+        "Reading note:\n"
+        "Lower AI-related share can reflect template dilution as bug-fix framing rises, not necessarily less AI work.\n\n"
+        "Cadence / quartile / depth charts need parseable release_date: blank APKMirror CSV dates are filled from "
+        "each APKMirror page Uploaded stamp when fetched (cached in data/cache/apkmirror_upload_dates.json; "
+        "optional APKMIRROR_UPLOAD_FETCH_MAX)."
+    )
+    if not submission_df.empty and {"Section", "Details"}.issubset(set(submission_df.columns)):
+        mask = submission_df["Section"].astype(str).eq("Challenges and limitations")
+        if mask.any():
+            i = int(submission_df.index[mask][0])
+            prior = str(submission_df.at[i, "Details"] or "").strip()
+            submission_df.at[i, "Details"] = (prior + "\n\n" + reading_note).strip() if prior else reading_note
 
     xlsx = output_dir / "normalized_dataset.xlsx"
     with pd.ExcelWriter(xlsx, engine="openpyxl") as wr:

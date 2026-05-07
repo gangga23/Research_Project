@@ -9,6 +9,9 @@ RSS/Atom (`android_changelog_feed_url`): auto-classified feeds; only
 If ``data/cache/apkmirror_{app_id}.csv`` exists with usable rows (version + APKMirror
 /apk/ URL), those rows are ingested as ``apkmirror_cache`` (medium) and count as
 structured coverage — skipping the review inferred fallback.
+Blank CSV ``release_date`` cells trigger a one-time APKMirror release-page fetch for an
+``Uploaded`` timestamp (cached in ``data/cache/apkmirror_upload_dates.json``) so dated
+cadence charts can include Android APKMirror rows.
 
 Review inferred (low) runs only when snapshot, Wayback, feed strict changelog,
 and APKMirror cache together provide no structured signal.
@@ -416,6 +419,13 @@ def load_apkmirror_cache_rows(
                 if not _usable_apkmirror_row_url(url):
                     continue
                 rdate = (row.get("release_date") or "").strip()
+                if not rdate:
+                    try:
+                        from apkmirror_upload_date import resolve_apk_upload_date
+
+                        rdate = resolve_apk_upload_date(url) or ""
+                    except ImportError:
+                        pass
                 key = (ver, rdate)
                 if key in keys or key in seen_apk:
                     continue

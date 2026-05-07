@@ -1,23 +1,23 @@
 validation_report
 config_apps: 10
 app_master_rows: 20
-app_version_history_rows: 443
+app_version_history_rows: 1326
 ios_version_history_rows: 250
-android_version_history_rows: 193
+android_version_history_rows: 1076
 apps_with_ios_and_android_rows: 10
 
 data_quality_report
 config_apps: 10
 app_master_rows: 20
-app_version_history_rows: 443
+app_version_history_rows: 1326
 ios_rows: 250
-android_rows: 193
-pct_all_rows_app_store_web: 56.4%
-pct_android_play_store_snapshot_rows: 5.2%
-pct_android_wayback_snapshot_rows: 9.3%
-pct_android_developer_changelog_rows: 22.8%
-pct_android_feature_signal_rows: 36.8%
-pct_android_apkmirror_cache_rows: 0.0%
-pct_android_review_inferred_rows: 25.9%
-pct_android_missing_version_number: 48.7%
-pct_all_rows_release_notes_not_available: 18.1%
+android_rows: 1076
+pct_all_rows_app_store_web: 18.9%
+pct_android_play_store_snapshot_rows: 0.9%
+pct_android_wayback_snapshot_rows: 2.1%
+pct_android_developer_changelog_rows: 4.1%
+pct_android_feature_signal_rows: 6.6%
+pct_android_apkmirror_cache_rows: 86.2%
+pct_android_review_inferred_rows: 0.0%
+pct_android_missing_version_number: 9.2%
+pct_all_rows_release_notes_not_available: 72.3%

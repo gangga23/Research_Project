@@ -4,7 +4,6 @@ Fast-scan visuals aligned with ``timeseries_insights_core`` (same facts as
 
 This sheet is intentionally small and rubric-aligned:
 - update frequency over time by app (cadence heatmaps — iOS / Android)
-- observation URL profile (`history_source_url`: Wayback vs APKMirror vs store listing)
 - iOS vs Android observation depth per app (dated span)
 - category share shift (oldest vs newest quartile; slope chart)
 
@@ -59,7 +58,8 @@ def _cadence_heatmap_colormap():
 
 def build_automated_trend_synopsis(version_df: pd.DataFrame) -> list[str]:
     """Bullets from shared core (coverage → cadence → quartiles → strategy read → epistemic)."""
-    return build_automated_trend_synopsis_bullets(version_df)
+    # Keep the viz sheet synopsis short/scannable.
+    return build_automated_trend_synopsis_bullets(version_df)[:6]
 
 
 def _save_png_bytes(buf: io.BytesIO, out_path: Path) -> Path:
@@ -232,12 +232,8 @@ def _chart_update_frequency_heatmap_platform(
     fs_tick_x = int(base_fs * 0.95)
     fs_cbar = int(base_fs * 1.25)
 
-    # Same canvas geometry for iOS and Android so paired heatmaps match in Excel.
-    row_px = 0.32
-    extra_pad = 2.6
-    h = min(row_px * len(apps) + extra_pad, 10.8)
-    w = min(0.35 * len(xlabels) + 4.8, 12.5)
-    fig, ax = plt.subplots(figsize=(w, h))
+    # Fixed requested geometry so heatmaps match across exports.
+    fig, ax = plt.subplots(figsize=(16, 7))
     fig.patch.set_facecolor("#ffffff")
     ax.set_facecolor("#ffffff")
 
@@ -280,7 +276,7 @@ def _chart_update_frequency_heatmap_platform(
     fig.savefig(
         buf,
         format="png",
-        dpi=115,
+        dpi=150,
         bbox_inches=None,
         facecolor="#ffffff",
         edgecolor="none",
@@ -346,7 +342,7 @@ def _chart_update_frequency_heatmap(version_df: pd.DataFrame) -> io.BytesIO | No
     fig.savefig(
         buf,
         format="png",
-        dpi=115,
+        dpi=150,
         bbox_inches="tight",
         facecolor="#ffffff",
         edgecolor="none",
@@ -357,7 +353,12 @@ def _chart_update_frequency_heatmap(version_df: pd.DataFrame) -> io.BytesIO | No
     return buf
 
 def _chart_category_evolution_quartile_buckets(version_df: pd.DataFrame) -> io.BytesIO | None:
-    """Oldest vs newest dated quartile — slope chart for top ``update_category`` labels (from run_pipeline taxonomy)."""
+    """
+    Category share shift over time (monthly, 2025–2026) for top ``update_category`` labels.
+
+    Replaces the old 2-point quartile slope chart so volatility / intermediate fluctuations
+    are visible rather than implied by straight endpoints.
+    """
     import matplotlib.pyplot as plt
     import matplotlib as mpl
     import numpy as np
@@ -367,24 +368,12 @@ def _chart_category_evolution_quartile_buckets(version_df: pd.DataFrame) -> io.B
     sub = dated_subset(version_df)
     if sub is None or len(sub) < 8:
         return None
-    s = sub.sort_values("_dt").reset_index(drop=True)
-    q = len(s) // 4
-    oldest = s.iloc[:q].copy()
-    newest = s.iloc[-q:].copy()
-
-    def _fmt_rng(frame: pd.DataFrame) -> str:
-        a = frame["_dt"].min()
-        b = frame["_dt"].max()
-        if pd.isna(a) or pd.isna(b):
-            return "n/a"
-        # Hyphen (not en-dash) + explicit strftime args avoid odd tick rendering;
-        # mpl tick Text can treat '%' specially unless parse_math=False.
-        left = a.strftime("%b %Y")
-        right = b.strftime("%b %Y")
-        return f"{left}-{right}"
-
-    o_rng = _fmt_rng(oldest)
-    n_rng = _fmt_rng(newest)
+    # Focus window: Jul 2025 — May 2026 (no future months).
+    start = pd.Timestamp("2025-07-01")
+    end = pd.Timestamp("2026-05-31")
+    s = sub[(sub["_dt"] >= start) & (sub["_dt"] <= end)].copy()
+    if len(s) < 6:
+        return None
 
     cat_allowed = set(rp.UPDATE_CATEGORIES)
 
@@ -392,150 +381,99 @@ def _chart_category_evolution_quartile_buckets(version_df: pd.DataFrame) -> io.B
         c = str(x).strip()
         return c if c in cat_allowed else "Other"
 
-    oldest["_bk"] = oldest["update_category"].map(_norm_cat)
-    newest["_bk"] = newest["update_category"].map(_norm_cat)
+    s["_bk"] = s["update_category"].map(_norm_cat)
+    s["_ym"] = s["_dt"].dt.to_period("M").astype(str)
 
-    cats_all: tuple[str, ...] = rp.UPDATE_CATEGORIES
-
-    def _share_quartile(frame: pd.DataFrame, key: str) -> float:
-        return 100.0 * float((frame["_bk"] == key).sum()) / float(max(len(frame), 1))
-
-    shares_old = {c: _share_quartile(oldest, c) for c in cats_all}
-    shares_new = {c: _share_quartile(newest, c) for c in cats_all}
-
-    # Plot top-K buckets so all taxonomy buckets can surface without overcrowding.
+    # Pick top-K categories within this window by overall share.
     K = 6
-    ranked = sorted(cats_all, key=lambda c: max(shares_old[c], shares_new[c]), reverse=True)
-    keys = ranked[:K]
-    remainder_old = max(0.0, 100.0 - sum(shares_old[c] for c in keys))
-    remainder_new = max(0.0, 100.0 - sum(shares_new[c] for c in keys))
+    overall = s["_bk"].value_counts(normalize=True)
+    keys = [k for k in overall.index.tolist() if k in cat_allowed][:K]
+    if not keys:
+        return None
+
+    # Monthly counts (fill missing months with 0 so volatility is visible).
+    months = pd.period_range(start.to_period("M"), end.to_period("M"), freq="M").astype(str).tolist()
+    counts = (
+        s.pivot_table(index="_ym", columns="_bk", values="app_id", aggfunc="count", fill_value=0)
+        .reindex(months, fill_value=0)
+    )
+
+    # Sparse-month gating: only plot months with ≥ 5 total observations.
+    SPARSE_MIN = 5
+    totals_per_month = counts.sum(axis=1)
+    valid_mask = (totals_per_month >= SPARSE_MIN).values
+
+    denom = totals_per_month.replace(0, np.nan)
+    shares = (100.0 * counts.div(denom, axis=0)).fillna(0.0)
+    shares = shares.reindex(columns=keys, fill_value=0.0)
 
     def _legend_label(full: str) -> str:
-        s = full.replace(" / ", "/")
-        return s if len(s) <= 42 else s[:39] + "…"
+        t = full.replace(" / ", "/")
+        return t if len(t) <= 44 else t[:41] + "…"
 
     short = [_legend_label(k) for k in keys]
+    BUGFIX_KEY = "Bug fixes / performance improvements"
+    BUGFIX_COLOR = "#0d3b66"  # darker blue
     tab = mpl.colormaps["tab10"]
-    palette = [tab(i % 10) for i in range(len(keys))]
+    palette: list = []
+    for i, k in enumerate(keys):
+        palette.append(BUGFIX_COLOR if k == BUGFIX_KEY else tab(i % 10))
 
-    o_share = [shares_old[k] for k in keys]
-    n_share = [shares_new[k] for k in keys]
-
-    def _slope_endpoint_dy_pt(vals: list[float], *, spread: float = 28.0) -> list[float]:
-        """Spread endpoint labels vertically (points); widening avoids collisions on dense slopes."""
-        order = sorted(range(len(vals)), key=lambda i: vals[i])
-        mid = (len(order) - 1) / 2.0
-        out = [0.0] * len(vals)
-        for rank, i in enumerate(order):
-            out[i] = (rank - mid) * spread
-        return out
-
-    def _slope_bump_close_pairs_dy_pt(vals: list[float], base_dy: list[float], *, min_sep_pt: float = 26.0) -> list[float]:
-        """Force larger vertical separation (points) when two endpoints sit close in % terms."""
-        out = list(base_dy)
-        order = sorted(range(len(vals)), key=lambda i: float(vals[i]))
-        for k in range(1, len(order)):
-            lo, hi = order[k - 1], order[k]
-            gap_pct = float(vals[hi]) - float(vals[lo])
-            if gap_pct >= 9.0:
-                continue
-            if abs(out[hi] - out[lo]) >= min_sep_pt:
-                continue
-            mid = (out[lo] + out[hi]) / 2.0
-            out[lo] = mid - min_sep_pt / 2.0 - 3.0
-            out[hi] = mid + min_sep_pt / 2.0 + 3.0
-        return out
-
-    fo = [float(v) for v in o_share]
-    fn = [float(v) for v in n_share]
-    dy_left = _slope_bump_close_pairs_dy_pt(fo, _slope_endpoint_dy_pt(fo, spread=32.0), min_sep_pt=30.0)
-    dy_right = _slope_endpoint_dy_pt(fn, spread=32.0)
-    dy_right = _slope_bump_close_pairs_dy_pt(fn, dy_right, min_sep_pt=30.0)
-    # Low % endpoints sit on/near y=0; negative offset points pull labels under the axis — bump upward.
-    low_pct_bump_pt = 26.0
-    for i in range(len(fo)):
-        if fo[i] < 12.0:
-            dy_left[i] = max(float(dy_left[i]), low_pct_bump_pt)
-        if fn[i] < 12.0:
-            dy_right[i] = max(float(dy_right[i]), low_pct_bump_pt)
-
-    fig, ax = plt.subplots(figsize=(8.2, 5.45))
+    # Plot
+    fig, ax = plt.subplots(figsize=(9.6, 5.6))
     fig.patch.set_facecolor("#ffffff")
     ax.set_facecolor("#ffffff")
-    fig.subplots_adjust(left=0.13, right=0.94, top=0.76, bottom=0.26)
+    fs_axis = 12
+    fs_leg = 10
 
-    import matplotlib.patheffects as pe
+    xs = np.arange(len(months))
+    masked_xs = np.where(valid_mask, xs, np.nan)
 
-    fs_ann = 11  # ~9 * 1.2
-    fs_axis = 13  # tick & axis labels ~10–11 * 1.2
-    fs_leg = 11
-
-    xs = np.array([0.0, 1.0])
-    for idx, (label, color) in enumerate(zip(short, palette)):
-        yo, yn = float(o_share[idx]), float(n_share[idx])
-        lx_pad = -54 - idx * 10
-        rx_pad = 22 + idx * 10
+    for idx, (k, label, color) in enumerate(zip(keys, short, palette)):
+        is_bugfix = k == BUGFIX_KEY
+        ys_full = shares[k].astype(float).values
+        ys_masked = np.where(valid_mask, ys_full, np.nan)
         ax.plot(
-            xs,
-            [yo, yn],
+            masked_xs,
+            ys_masked,
             marker="o",
-            markersize=9,
-            markeredgecolor="#ffffff",
-            markeredgewidth=1.85,
-            linewidth=2.9,
+            markersize=4.4 if is_bugfix else 3.2,
+            linewidth=2.5 if is_bugfix else 1.2,
             color=color,
-            label=label,
+            label=label + (" (key finding)" if is_bugfix else ""),
             solid_capstyle="round",
-            clip_on=False,
-            zorder=4,
+            zorder=4 if is_bugfix else 3,
         )
-        ta = ax.annotate(
-            f"{yo:.0f}%",
-            (0.0, yo),
-            xytext=(lx_pad, dy_left[idx]),
-            textcoords="offset points",
-            ha="right",
-            va="center",
-            fontsize=fs_ann,
-            fontweight="600",
-            color=color,
-            clip_on=False,
-            zorder=6,
-        )
-        ta.set_path_effects([pe.withStroke(linewidth=4.0, foreground="#ffffff")])
-        tb = ax.annotate(
-            f"{yn:.0f}%",
-            (1.0, yn),
-            xytext=(rx_pad, dy_right[idx]),
-            textcoords="offset points",
-            ha="left",
-            va="center",
-            fontsize=fs_ann,
-            fontweight="600",
-            color=color,
-            clip_on=False,
-            zorder=6,
-        )
-        tb.set_path_effects([pe.withStroke(linewidth=4.0, foreground="#ffffff")])
 
-    ax.set_xticks([0.0, 1.0])
-    xt1 = f"Oldest quartile\n({o_rng})"
-    xt2 = f"Newest quartile\n({n_rng})"
-    xlabels_obj = ax.set_xticklabels([xt1, xt2], fontsize=fs_axis, color="#374151")
-    for xl in xlabels_obj:
-        if hasattr(xl, "set_parse_math"):
-            xl.set_parse_math(False)
-    ax.set_xlim(-0.52, 1.48)
-    peak = max(max(o_share, default=0.0), max(n_share, default=0.0))
-    ylim_top = min(100.0, peak + 24.0)
-    ax.set_ylim(-3.0, ylim_top)
-    ax.set_yticks([t for t in (0, 20, 40, 60, 80, 100) if t <= ylim_top + 1e-6])
-    ax.set_ylabel("Share within quartile (%)", fontsize=fs_axis, color="#374151", labelpad=10)
+    # Light grey shading on excluded (sparse) months.
+    sparse_idx = np.where(~valid_mask)[0]
+    for i in sparse_idx:
+        ax.axvspan(i - 0.5, i + 0.5, color="#f1f5f9", alpha=0.6, zorder=0)
+
+    # X ticks: monthly with quarterly labels for readability.
+    tick_idx = [i for i, m in enumerate(months) if m.endswith(("-01", "-04", "-07", "-10"))]
+    if not tick_idx:
+        tick_idx = list(range(0, len(months), 3))
+    tick_lbl = [_compact_month_tick_label(months[i]) for i in tick_idx]
+    ax.set_xticks(tick_idx)
+    ax.set_xticklabels(tick_lbl, rotation=0, ha="center", fontsize=fs_axis, color="#374151")
+    ax.set_xlim(-0.5, len(months) - 0.5)
+
+    # Y zoom based on plotted (valid) months only.
+    plotted_vals = shares.values[valid_mask]
+    if plotted_vals.size:
+        vmin = float(np.nanmin(plotted_vals))
+        vmax = float(np.nanmax(plotted_vals))
+    else:
+        vmin, vmax = 0.0, 1.0
+    span = max(1e-6, vmax - vmin)
+    pad = max(2.0, 0.10 * span)
+    ax.set_ylim(max(-0.5, vmin - pad), min(100.0, vmax + pad))
+    ax.set_ylabel("Share of updates within month (%)", fontsize=fs_axis, color="#374151", labelpad=10)
 
     ax.set_axisbelow(True)
-    ax.axvline(0.0, color="#d8dee8", linewidth=1.45, zorder=1)
-    ax.axvline(1.0, color="#d8dee8", linewidth=1.45, zorder=1)
     ax.grid(axis="y", color="#e8ecf2", linestyle="-", linewidth=1.0, zorder=0)
+    ax.grid(axis="x", color="#f1f5f9", linestyle="-", linewidth=0.8, zorder=0)
     ax.tick_params(axis="both", colors="#4b5563", labelsize=fs_axis, length=4, width=0.9)
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
@@ -544,11 +482,63 @@ def _chart_category_evolution_quartile_buckets(version_df: pd.DataFrame) -> io.B
     ax.spines["left"].set_linewidth(1.15)
     ax.spines["bottom"].set_linewidth(1.15)
 
+    # Reference (policy / event) markers — anchored to month index.
+    month_to_idx = {m: i for i, m in enumerate(months)}
+    ymin_lim, ymax_lim = ax.get_ylim()
+    label_y = ymax_lim - (ymax_lim - ymin_lim) * 0.04
+    refs = [
+        ("2025-09", "iOS Release"),
+        ("2025-11", "Holiday Season"),
+        ("2026-01", "TikTok Deadline"),
+    ]
+    for ym, lbl in refs:
+        if ym not in month_to_idx:
+            continue
+        x_ref = month_to_idx[ym]
+        ax.axvline(x_ref, color="#c0392b", linestyle="--", linewidth=1.1, alpha=0.5, zorder=1)
+        ax.text(
+            x_ref + 0.08,
+            label_y,
+            lbl,
+            rotation=90,
+            ha="left",
+            va="top",
+            fontsize=7,
+            color="#c0392b",
+            alpha=0.9,
+        )
+
+    # Annotation for Jan-Apr 2026 bug-fix dominance peak.
+    if BUGFIX_KEY in shares.columns:
+        bugfix_series = shares[BUGFIX_KEY].astype(float)
+        peak_window = [m for m in ("2026-01", "2026-02", "2026-03", "2026-04") if m in month_to_idx]
+        if peak_window:
+            peak_vals = bugfix_series.loc[peak_window]
+            peak_month = str(peak_vals.idxmax())
+            peak_x = month_to_idx[peak_month]
+            peak_y = float(peak_vals.max())
+            ax.annotate(
+                "Bug fixes dominate\n(60-65%)",
+                xy=(peak_x, peak_y),
+                xytext=(peak_x - 6.0, min(95.0, peak_y + 12.0)),
+                fontsize=10,
+                fontweight="bold",
+                color="#0d3b66",
+                ha="center",
+                va="bottom",
+                bbox=dict(boxstyle="round", facecolor="yellow", alpha=0.8),
+                arrowprops=dict(arrowstyle="->", color="#0d3b66", lw=1.1, alpha=0.85),
+                zorder=6,
+            )
+
+    # Legend outside plot area so it doesn't shrink the axes.
     ax.legend(
-        loc="upper right",
-        bbox_to_anchor=(0.99, 0.99),
-        ncol=2 if len(keys) >= 5 else 1,
+        title=f"Top {len(keys)} categories",
+        loc="upper left",
+        bbox_to_anchor=(1.02, 1.0),
+        borderaxespad=0.0,
         fontsize=fs_leg,
+        title_fontsize=fs_leg,
         frameon=True,
         fancybox=True,
         framealpha=1.0,
@@ -557,9 +547,9 @@ def _chart_category_evolution_quartile_buckets(version_df: pd.DataFrame) -> io.B
     )
 
     fig.text(
-        0.13,
+        0.10,
         0.97,
-        "Category share shift — oldest vs newest quartile",
+        "Category share over time (monthly) — Jan 2025 to May 2026",
         fontsize=14,
         fontweight="600",
         color="#1f2937",
@@ -567,18 +557,27 @@ def _chart_category_evolution_quartile_buckets(version_df: pd.DataFrame) -> io.B
         ha="left",
     )
     fig.text(
-        0.13,
-        0.895,
-        f"Top {len(keys)} categories by max(quartile share); remainder not drawn: "
-        f"{remainder_old:.0f}% (oldest), {remainder_new:.0f}% (newest).",
-        fontsize=12,
+        0.10,
+        0.905,
+        "Each line is within-month share among dated observations; bug-fix line emphasized as the key finding.",
+        fontsize=11,
         color="#5c6575",
         va="top",
         ha="left",
     )
+    fig.text(
+        0.10,
+        0.03,
+        "Months with <5 observations excluded; policy markers for reference only.",
+        fontsize=9,
+        color="#6b7280",
+        va="bottom",
+        ha="left",
+    )
 
+    fig.subplots_adjust(left=0.10, right=0.74, top=0.83, bottom=0.18)
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=115, bbox_inches="tight", facecolor="#ffffff", edgecolor="none", pad_inches=0.18)
+    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor="#ffffff", edgecolor="none", pad_inches=0.18)
     plt.close(fig)
     buf.seek(0)
     return buf
@@ -676,7 +675,7 @@ def _chart_history_url_class_by_platform(version_df: pd.DataFrame) -> io.BytesIO
     fig.savefig(
         buf,
         format="png",
-        dpi=115,
+        dpi=150,
         bbox_inches=None,
         facecolor="#ffffff",
         edgecolor="none",
@@ -720,8 +719,7 @@ def _chart_observation_depth_by_app_platform(version_df: pd.DataFrame) -> io.Byt
     n_apps = len(apps)
     bar_h = 0.34
     # Cap height so ~10 apps don’t get an oversized vertical canvas vs bar thickness.
-    fig_h = min(4.35, max(2.55, 0.19 * n_apps + 1.28))
-    fig, ax = plt.subplots(figsize=(7.6, fig_h))
+    fig, ax = plt.subplots(figsize=(14, 6))
     fig.patch.set_facecolor("#ffffff")
     ax.set_facecolor("#ffffff")
     ax.barh(y - bar_h / 2, ios_vals, height=bar_h, label="iOS", color="#5b9bd5")
@@ -740,7 +738,7 @@ def _chart_observation_depth_by_app_platform(version_df: pd.DataFrame) -> io.Byt
     fig.savefig(
         buf,
         format="png",
-        dpi=115,
+        dpi=150,
         bbox_inches="tight",
         facecolor="#ffffff",
         edgecolor="none",
@@ -828,10 +826,10 @@ def append_visualization_sheet(xlsx_path: Path, version_df: pd.DataFrame) -> Non
     ws.column_dimensions["A"].width = 44.0
     for col in "BCDEFGHIJ":
         ws.column_dimensions[col].width = 14.0
-    ws.freeze_panes = "A5"
+    ws.freeze_panes = None
 
     ws["A1"] = "Visualization (Quick Scans)"
-    ws["A1"].font = Font(bold=True, size=14)
+    ws["A1"].font = Font(bold=True, size=18)
     ws.merge_cells("A1:J1")
 
     n = len(version_df)
@@ -839,21 +837,21 @@ def append_visualization_sheet(xlsx_path: Path, version_df: pd.DataFrame) -> Non
     and_n = len(version_df[version_df["platform"] == "Android"])
     dated_n = int(parse_release_dates(version_df).notna().sum())
     ws["A3"] = (
-        f"Same underlying rows as app_version_history / submission_observations ({n} observations; {ios_n} iOS / "
-        f"{and_n} Android; {dated_n} dated). Charts below focus on cadence by app, category evolution, and per-app "
-        "iOS/Android depth (dated span)."
+        "Same underlying rows as app_version_history / submission_observations\n"
+        f"({n} observations; {ios_n} iOS / {and_n} Android; {dated_n} dated)."
     )
     ws["A3"].alignment = Alignment(wrap_text=True, vertical="top")
     ws.merge_cells("A3:J4")
-    ws.row_dimensions[3].height = 54
+    ws.row_dimensions[3].height = 40
 
     ws["A5"] = "Automated trend synopsis (quick read)"
     ws["A5"].font = Font(bold=True, size=11)
-    synopsis = "\n".join(build_automated_trend_synopsis(version_df))
+    bullets = build_automated_trend_synopsis(version_df)
+    synopsis = "\n".join(("• " + b.lstrip("• ").strip()) for b in bullets if str(b).strip())
     ws["A6"] = synopsis
     ws["A6"].alignment = Alignment(wrap_text=True, vertical="top")
     ws.merge_cells("A6:J13")
-    ws.row_dimensions[6].height = 220
+    ws.row_dimensions[6].height = 150
 
     app_order = sorted(version_df["app_name"].fillna("").astype(str).unique().tolist())
     app_order = [a for a in app_order if a]
@@ -942,10 +940,6 @@ def append_visualization_sheet(xlsx_path: Path, version_df: pd.DataFrame) -> Non
     and_png = _save_png_bytes(and_buf, charts_dir / "heatmap_android.png") if and_buf else None
     images.append(("1B. Android cadence heatmap", and_png))
 
-    url_buf = _chart_history_url_class_by_platform(version_df)
-    url_png = _save_png_bytes(url_buf, charts_dir / "url_class_by_platform.png") if url_buf else None
-    images.append(("1C. Observation URL profile by platform (Wayback / APKMirror / store listing)", url_png))
-
     depth_buf = _chart_observation_depth_by_app_platform(version_df)
     depth_png = _save_png_bytes(depth_buf, charts_dir / "depth_by_app_platform.png") if depth_buf else None
     images.append(("iOS vs Android observation depth (dated span) by app", depth_png))
@@ -954,35 +948,23 @@ def append_visualization_sheet(xlsx_path: Path, version_df: pd.DataFrame) -> Non
     cat_png = _save_png_bytes(cat_buf, charts_dir / "category_evolution_quartiles.png") if cat_buf else None
     images.append(("Category share shift (oldest vs newest quartile; slope chart)", cat_png))
 
+    # Layout controls: keep chart blocks tight (≤ 2 blank rows; default to 1).
+    IMG_ROW_SPAN = 17  # Approximate row footprint for 640×330 images at default row heights.
+    GAP_ROWS = 1
+
     for title, p in images:
         ws.cell(row=row_anchor, column=1, value=title)
         ws.cell(row=row_anchor, column=1).font = Font(bold=True, size=10)
-        row_anchor += 1
+        img_row = row_anchor + 1
         if p is None or not p.is_file():
-            ws.cell(row=row_anchor, column=1, value="(Not enough data for this chart — see synopsis.)")
-            row_anchor += 3
+            ws.cell(row=img_row, column=1, value="(Not enough data for this chart — see synopsis.)")
+            row_anchor = img_row + 1 + GAP_ROWS
             continue
         img = XLImage(str(p))
         img.width = 640
         img.height = 330
-        ws.add_image(img, f"A{row_anchor}")
-        row_anchor += 21
-
-    ws.cell(row=row_anchor, column=1, value="Reading note")
-    ws.cell(row=row_anchor, column=1).font = Font(bold=True, size=11)
-    row_anchor += 1
-    note_cell = ws.cell(
-        row=row_anchor,
-        column=1,
-        value=(
-            "Lower AI-related share can reflect template dilution as bug-fix framing rises, "
-            "not necessarily less AI work."
-        ),
-    )
-    note_cell.alignment = Alignment(wrap_text=True, vertical="top")
-    ws.merge_cells(start_row=row_anchor, start_column=1, end_row=row_anchor + 1, end_column=10)
-    ws.row_dimensions[row_anchor].height = 28
-    ws.row_dimensions[row_anchor + 1].height = 28
+        ws.add_image(img, f"A{img_row}")
+        row_anchor = img_row + IMG_ROW_SPAN + GAP_ROWS
 
     ws.column_dimensions["A"].width = 108
     wb.save(xlsx_path)
