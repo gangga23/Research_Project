@@ -561,7 +561,7 @@ TABLE app_master
 
 TABLE app_version_history
   app_id, app_name, platform
-  version_number (empty string when unknown; never fabricated)
+  version_number (Unknown / empty when source does not provide a version string; never fabricated)
   release_date (ISO YYYY-MM-DD or empty)
   release_notes (cleaned; Not available when absent)
   has_release_notes (boolean; True when release_notes is substantive)
@@ -600,6 +600,8 @@ def format_feed_validation_report(feed_rows: list[dict]) -> str:
 
 
 def data_quality_report(version_df: pd.DataFrame, n_config_apps: int, master_rows: int) -> str:
+    from version_display import version_string_missing
+
     n = len(version_df)
     ad = version_df[version_df["platform"] == "Android"]
     na = max(len(ad), 1)
@@ -613,7 +615,7 @@ def data_quality_report(version_df: pd.DataFrame, n_config_apps: int, master_row
     p_feat = _pct(ad["source_type"] == "feature_signal")
     p_apk = _pct(ad["source_type"] == "apkmirror_cache")
     p_rev = _pct(ad["source_type"] == "review_inferred")
-    mv = ad["version_number"].fillna("").astype(str).str.strip() == ""
+    mv = ad["version_number"].map(version_string_missing)
     miss_ver = 100.0 * float(mv.sum()) / na
 
     ios = version_df[version_df["platform"] == "iOS"]

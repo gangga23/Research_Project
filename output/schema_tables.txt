@@ -11,7 +11,7 @@ TABLE app_master
 
 TABLE app_version_history
   app_id, app_name, platform
-  version_number (empty string when unknown; never fabricated)
+  version_number (Unknown / empty when source does not provide a version string; never fabricated)
   release_date (ISO YYYY-MM-DD or empty)
   release_notes (cleaned; Not available when absent)
   has_release_notes (boolean; True when release_notes is substantive)

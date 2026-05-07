@@ -21,7 +21,10 @@ except ImportError:
 
 
 def _norm_ver(v: object) -> str:
-    return (str(v) if v is not None else "").strip()
+    s = (str(v) if v is not None else "").strip()
+    if s.casefold() == "unknown":
+        return ""
+    return s
 
 
 def _norm_date_iso(d: object) -> str:

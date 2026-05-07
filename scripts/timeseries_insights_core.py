@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import pandas as pd
 
+from version_display import version_string_missing
+
 # Categories highlighted for quartile deltas (rule-based labels).
 STRATEGY_CATS_QUARTILE: tuple[str, ...] = (
     "AI-related features",
@@ -226,7 +228,7 @@ def coverage_lines(version_df: pd.DataFrame, sub: pd.DataFrame) -> list[str]:
         p_d = sub[sub["platform"] == plat]
         if len(p_all) == 0:
             continue
-        ver_nonempty = p_all["version_number"].fillna("").astype(str).str.strip().ne("").mean() * 100.0
+        ver_nonempty = (~p_all["version_number"].map(version_string_missing)).mean() * 100.0
         top_src = p_all["source_type"].value_counts().head(2)
         src_hint = ", ".join(f"{k} ({int(v)})" for k, v in top_src.items())
         lines.append(
@@ -418,7 +420,7 @@ def coverage_lines_synopsis(sub: pd.DataFrame, version_df: pd.DataFrame) -> list
         p_d = sub[sub["platform"] == plat]
         if len(p_all) == 0:
             continue
-        ver_nonempty = p_all["version_number"].fillna("").astype(str).str.strip().ne("").mean() * 100.0
+        ver_nonempty = (~p_all["version_number"].map(version_string_missing)).mean() * 100.0
         top_src = p_all["source_type"].value_counts().head(2)
         src_hint = ", ".join(f"{k} ({int(v)})" for k, v in top_src.items())
         lines.append(

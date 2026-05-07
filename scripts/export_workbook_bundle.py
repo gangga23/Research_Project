@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from version_display import apply_version_number_export_column
+
 _SPOTIFY_CONTAM_RE = r"(?:With the Spotify music and podcast app|WHY SPOTIFY FOR MUSIC AND PODCASTS\?)"
 
 
@@ -375,7 +377,7 @@ def _apply_normalized_workbook_openpyxl_formatting(xlsx_path: Path) -> None:
             "Time-series patterns",
             "Interesting patterns",
             "Challenges",
-            "Data quality (auto)",
+            "Data quality",
             "Last updated",
         }
         for r in range(1, ws.max_row + 1):
@@ -551,17 +553,17 @@ def export_workbook_bundle(
     ss = _load_submission_summary(script_dir)
     repo_url = ss.load_repository_url(repo_root)
 
-    submission_obs_df = ss.build_submission_observations(version_df, master_df)
-
     version_df_public = version_df.drop(columns=["_dq_pipeline_note"], errors="ignore")
+    version_df_public = apply_version_number_export_column(version_df_public)
+
+    submission_obs_df = ss.build_submission_observations(version_df_public, master_df)
 
     (output_dir / "schema_tables.txt").write_text(rp.schema_text(), encoding="utf-8")
     if rewrite_master_version_csv:
         master_df.to_csv(output_dir / "app_master.csv", index=False, encoding="utf-8")
-        version_df_public.to_csv(output_dir / "app_version_history.csv", index=False, encoding="utf-8")
-    elif contam_n:
-        # Even in "rebuild from cache" mode, we must not leave contaminated cached CSVs in place.
-        version_df_public.to_csv(output_dir / "app_version_history.csv", index=False, encoding="utf-8")
+    # Always write version history with display formatting (Unknown for missing version strings).
+    version_df_public.to_csv(output_dir / "app_version_history.csv", index=False, encoding="utf-8")
+    if contam_n and not rewrite_master_version_csv:
         print(
             f"[warn] Sanitized {contam_n} contaminated Android release_notes rows and rewrote app_version_history.csv.",
             file=sys.stderr,

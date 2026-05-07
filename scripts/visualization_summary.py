@@ -27,6 +27,7 @@ from timeseries_insights_core import (
     dated_subset,
     parse_release_dates,
 )
+from version_display import version_string_missing
 
 _SHEET = "charts"
 
@@ -758,7 +759,7 @@ def build_explanatory_questions(version_df: pd.DataFrame) -> list[str]:
             "Android share is high versus typical embed-vs-Play asymmetry—audit source_type per observation."
         )
 
-    missing_ver = version_df["version_number"].fillna("").astype(str).str.strip().eq("").mean()
+    missing_ver = version_df["version_number"].map(version_string_missing).mean()
     if missing_ver > 0.45:
         dynamic.append(
             "Sparse version_number weakens semver cadence reads—rely on dated proxies and provenance filters."
@@ -932,7 +933,7 @@ def append_visualization_sheet(xlsx_path: Path, version_df: pd.DataFrame) -> Non
     ws.merge_cells("A1:S1")
 
     bullets = build_automated_trend_synopsis(version_df)
-    ws["A4"] = "Automated trend synopsis (quick read)"
+    ws["A4"] = "Automated trend synopsis"
     ws["A4"].font = label_font
     ws["A4"].fill = fill_hdr
     ws.merge_cells("A4:S4")

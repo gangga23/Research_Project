@@ -20,6 +20,7 @@ from timeseries_insights_core import (
     dated_subset,
     parse_release_dates,
 )
+from version_display import version_string_missing
 
 META_FILENAME = "project_meta.json"
 
@@ -91,7 +92,7 @@ def challenges_block(version_df: pd.DataFrame) -> str:
     andf = version_df[version_df["platform"] == "Android"]
     miss_ver = 0.0
     if len(andf):
-        miss_ver = 100.0 * float(andf["version_number"].fillna("").astype(str).str.strip().eq("").mean())
+        miss_ver = 100.0 * float(andf["version_number"].map(version_string_missing).mean())
 
     dt = parse_release_dates(version_df)
     dated = dt.notna()
@@ -110,7 +111,7 @@ def challenges_block(version_df: pd.DataFrame) -> str:
         "data quality. Restrict cadence and event-study claims to rows with release_date (and disclose subset sizes).\n\n"
         "• Coverage asymmetry: Android lacks a public multi-version changelog API comparable to the App Store web "
         "embed; longitudinal depth depends on Wayback, feeds, APKMirror listing CSVs, and bounded review inference.\n\n"
-        f"• Android version_number is blank for {miss_ver:.0f}% of observations — genuine disclosure limits "
+        f"• Android version_number is missing/Unknown for {miss_ver:.0f}% of observations — genuine disclosure limits "
         "(Wayback snapshots, Play variant listings), not fabricated fillers. submission_observations » notes flags "
         "fabrication policy, Wayback date caveat, Play variant listings, and scrape anomalies only; exclude sparse-version "
         "rows from strict semver sequencing but retain for cadence/category reads.\n\n"
@@ -186,7 +187,7 @@ def _metrics_block_for_summary(version_df: pd.DataFrame) -> str:
     def pct_ver(frame: pd.DataFrame) -> float:
         if len(frame) == 0:
             return 0.0
-        return 100.0 * float(frame["version_number"].fillna("").astype(str).str.strip().ne("").sum()) / float(len(frame))
+        return 100.0 * float((~frame["version_number"].map(version_string_missing)).sum()) / float(len(frame))
 
     ver_line = f"{pct_ver(ios):.0f}% iOS / {pct_ver(andf):.0f}% Android"
 
@@ -433,8 +434,9 @@ def build_submission_summary_dataframe(
     )
 
     # Compute dated-quartile shifts on disclosure language (not engineering work).
-    newest_bugfix = oldest_bugfix = newest_pay = oldest_pay = newest_feat = oldest_feat = 0.0
+    newest_bugfix = oldest_bugfix = 0.0
     bugfix_shift = 0.0
+    holiday_pay_ui_peak_pct = 0.0
     if total_dated >= 8:
         sub = version_df.loc[dated].copy()
         sub["_dt"] = dt[dated]
@@ -444,26 +446,46 @@ def build_submission_summary_dataframe(
         newest = s.iloc[-q:]
         oldest_bugfix = 100.0 * cat_share(oldest, "Bug fixes / performance improvements")
         newest_bugfix = 100.0 * cat_share(newest, "Bug fixes / performance improvements")
-        oldest_pay = 100.0 * cat_share(oldest, "Payments / monetization")
-        newest_pay = 100.0 * cat_share(newest, "Payments / monetization")
-        oldest_feat = 100.0 * cat_share(oldest, "New product feature")
-        newest_feat = 100.0 * cat_share(newest, "New product feature")
         bugfix_shift = newest_bugfix - oldest_bugfix
 
+    # Peak **monthly** share of Payments + UI / design labels within Oct–Nov 2025 (holiday shipping window).
+    # Aligns narrative with "payment and UI-related" wording; differs from newest_quartile payment-only share.
+    pay_ui_cats = ("Payments / monetization", "UI / design changes")
+    if total_dated >= 1:
+        subh = version_df.loc[dated].copy()
+        subh["_dt"] = dt[dated]
+        t0 = pd.Timestamp("2025-10-01")
+        t1 = pd.Timestamp("2025-12-01")
+        win = subh[(subh["_dt"] >= t0) & (subh["_dt"] < t1)]
+        if len(win) > 0:
+            w = win.copy()
+            w["_period"] = pd.to_datetime(w["_dt"], errors="coerce").dt.to_period("M")
+            peaks: list[float] = []
+            for _, g in w.dropna(subset=["_period"]).groupby("_period", sort=True):
+                m = g["update_category"].astype(str).isin(pay_ui_cats)
+                if len(g) > 0:
+                    peaks.append(100.0 * float(m.sum()) / float(len(g)))
+            if peaks:
+                holiday_pay_ui_peak_pct = max(peaks)
+
     main_finding = (
-        "The clearest pattern in the data is not about what apps built — it is about how developers chose to describe what they built. "
-        "Bug-fix language in release notes grows sharply in the most recent period, while AI-related language stays comparatively rare. "
-        "This gap suggests release notes function as a strategic communication tool (compliance + expectation management), "
-        "not a transparent engineering log."
+        "The dataset reveals two major patterns:\n\n"
+        "First, app update frequency and composition evolve over time in this panel, consistent with mature apps "
+        "moving from feature-heavy launch periods toward more maintenance-oriented update rhythms.\n\n"
+        "Second, release note language increasingly emphasizes bug fixes and stability. "
+        "That emphasis may reflect communication strategy in addition to underlying engineering priorities — "
+        "rather than a literal engineering changelog alone."
     )
     if newest_bugfix > 0:
         main_finding = (
-            "The clearest pattern in the data is not about what apps built — it is about how developers chose to describe what they built. "
-            f"Bug-fix language in release notes rises from {oldest_bugfix:.0f}% of updates in the oldest dated quartile "
-            f"to {newest_bugfix:.0f}% in the newest (a {bugfix_shift:+.0f} pp shift). "
-            "Over the same period, AI-related language remains comparatively rare. "
-            "This gap suggests release notes function as a strategic communication tool (compliance + expectation management), "
-            "not a transparent engineering log."
+            "The dataset reveals two major patterns:\n\n"
+            "First, app update frequency and composition evolve systematically over time; in this panel, mature apps "
+            "generally shift from feature-heavy launch windows toward more maintenance-oriented update cycles.\n\n"
+            "Second, release note language increasingly emphasizes bug fixes and stability — for example, bug-fix "
+            f"language accounts for {oldest_bugfix:.0f}% of dated updates in the oldest quartile vs "
+            f"{newest_bugfix:.0f}% in the newest (a {bugfix_shift:+.0f} pp shift). "
+            "That shift may reflect communication strategy in addition to underlying engineering priorities, "
+            "not solely what shipped in each release."
         )
 
     finding_caveat = (
@@ -519,8 +541,9 @@ def build_submission_summary_dataframe(
         "Apple and Google both enforce App Store feature freezes "
         "around the December holiday period, creating a hard "
         "deadline for shipping monetization features. "
-        "Our data shows payment-related updates peaking at "
-        f"{newest_pay:.0f}%+ in Oct–Nov 2025 across shopping, "
+        "Our data shows Payments + UI / design disclosure labels peaking at "
+        f"roughly {holiday_pay_ui_peak_pct:.0f}% of dated updates in the peak month "
+        "within Oct–Nov 2025 across shopping, "
         "delivery, and payment apps — then collapsing to under "
         "10% by January 2026. This is a policy-shaped commercial "
         "cycle, not organic development rhythm. "
@@ -537,7 +560,7 @@ def build_submission_summary_dataframe(
         "at the app level, not just panel-wide trends. "
         "It also raises a question our data cannot answer: "
         "were those updates genuine technical preparations, "
-        "or strategic disclosure activity ahead of "
+        "or communication-focused disclosure ahead of "
         "regulatory scrutiny? The release note language "
         "for TikTok in this period would need qualitative "
         "review to distinguish between the two."
@@ -547,19 +570,16 @@ def build_submission_summary_dataframe(
         "data — iOS 18 SDK deadlines, the holiday App Store "
         "feature freeze, and the TikTok US deadline — suggest "
         "that app update patterns are not driven primarily by "
-        "internal development cycles. They are shaped by "
+        "internal development cycles alone. They may also be shaped by "
         "external platform policy calendars. "
-        "Developers appear to time releases, and frame release "
-        "language, in response to platform enforcement windows "
-        "rather than purely in response to user needs or "
-        "product roadmaps. "
-        "This has a direct implication for how to read "
-        "release note data: a spike in bug-fix language "
-        "is more likely to signal an upcoming platform "
-        "compliance deadline than an actual increase in "
-        "bug-fix engineering work. "
-        "Release notes function as a regulatory communication "
-        "tool as much as a product communication tool."
+        "The timing and framing of releases in our panel are consistent with developers responding to platform enforcement windows "
+        "as well as product and user needs — this interpretation would need external validation. "
+        "One cautious reading of release note data is that a spike in bug-fix language "
+        "may more plausibly reflect an upcoming platform "
+        "compliance window than a measured increase in "
+        "bug-fix engineering work on its own. "
+        "Release notes can function as regulatory communication "
+        "channels as well as product communication — the balance cannot be settled from text alone."
     )
 
     # Cleaner policy write-up: correlation-first, with explicit identification caveat.
@@ -585,7 +605,8 @@ def build_submission_summary_dataframe(
         "2. Holiday commercial window (Oct–Nov 2025)\n"
         "Payment and UI-related update language peaks around "
         "October–November 2025 — reaching roughly "
-        f"{newest_pay:.0f}% of monthly updates — then declines by January 2026. "
+        f"{holiday_pay_ui_peak_pct:.0f}% of dated updates in the strongest month of that window "
+        "(Payments + UI / design labels combined) — then declines by January 2026. "
         "This timing is consistent with pre-holiday feature shipping "
         "patterns widely reported by mobile developers, though we "
         "cannot confirm this from our data alone. "
@@ -599,7 +620,7 @@ def build_submission_summary_dataframe(
         "availability deadline. This is a single app out of ten "
         "and should not be read as a panel-wide effect. "
         "The spike could reflect genuine technical preparation, "
-        "strategic disclosure activity, or both — "
+        "communication-oriented disclosure, or both — "
         "the release note content for this period would need "
         "qualitative review to distinguish between these explanations.\n\n"
 
@@ -627,9 +648,9 @@ def build_submission_summary_dataframe(
     )
 
     why_matters = (
-        "Release notes are strategic documents — policy pressure shapes what gets disclosed and how. "
-        "That means this dataset is best read as a policy-impact measurement tool on disclosure behavior: "
-        "platform calendars influence both update timing and the language developers use to frame change."
+        "Release notes can serve both product and compliance-facing roles; policy pressure may influence what is disclosed and how it is framed. "
+        "Accordingly, this dataset is best read as capturing disclosure language and timing that may co-move with platform policy windows — "
+        "not as a complete picture of engineering priorities."
     )
 
     can_cannot = (
@@ -661,6 +682,11 @@ def build_submission_summary_dataframe(
     has_notes_count = int(version_df.get("has_release_notes", pd.Series([False] * n)).fillna(False).sum())
     pct_no_notes = 100.0 * (1.0 - float(has_notes_count) / max(n, 1))
     challenges = (
+        "• Android metadata is less standardized than iOS: fragmented archival sources and strict parseable-date rules "
+        "explain much missingness; remaining gaps also reflect recoverable collection limits (rescrape, listing CSV backfills, "
+        "blocked detail pages) rather than a fully exhaustive archive. "
+        "For the closest App Store vs Play timing comparison, pair dated iOS App Store rows with dated Play/changelog-sourced "
+        "Android rows, report n, and cross-check Data quality.\n"
         "• Android dating required four-source reconstruction because Google Play has no public version-history API.\n"
         f"• Of {android_rows:,} Android observations, {android_dated} ({pct_android_dated:.0f}%) have confirmed dates and support time-series charts; "
         "undated rows still contribute to version counts and disclosure/category totals.\n"
@@ -690,6 +716,13 @@ def build_submission_summary_dataframe(
             f"• Official store sources: {ios_high} iOS (App Store) + {android_officialish} Android (Play/Wayback/changelog)",
             f"• Observations with release notes: {has_notes_count:,} of {total_rows:,} ({100.0 - pct_no_notes:.0f}%)",
             f"• Date span: {date_min} → {date_max}",
+            "• Observation rows can share the same app–platform–version when version_number is missing or when two "
+            "sources record the same build; headline counts are scrape-depth, not unique-release counts unless filtered/deduped. "
+            "This stacking is concentrated in undated / multi-source Android recovery rows; it does not negate dated "
+            "App Store web (iOS) or parseable Play/changelog Android rows used for main timing comparisons.\n"
+            "• is_current_version: when Google Play lists “Varies with device,” no row resolves to a single Yes — "
+            "that is expected (no one comparable semver), not a pipeline bug. If two sources both match the store "
+            "current string, one canonical Yes is kept (Play/changelog preferred over mirror/Wayback).",
         ]
     )
 
@@ -741,7 +774,7 @@ def build_submission_summary_dataframe(
     rows.append(("Time-series patterns", ts_patterns))
     rows.append(("Interesting patterns", interesting))
     rows.append(("Challenges", challenges))
-    rows.append(("Data quality (auto)", dq_block))
+    rows.append(("Data quality", dq_block))
     rows.append(("Last updated", timestamp))
 
     return pd.DataFrame(rows, columns=["Section", "Details"])
@@ -773,11 +806,11 @@ def _versions_equivalent_for_current(obs_ver: str, store_ver: str) -> bool:
 
 def _is_current_cell(row: pd.Series) -> str:
     vn = row.get("version_number")
-    cv = row.get("store_current_version")
-    vn_s = "" if vn is None or (isinstance(vn, float) and pd.isna(vn)) else str(vn).strip()
-    cv_s = "" if cv is None or (isinstance(cv, float) and pd.isna(cv)) else str(cv).strip()
-    if not vn_s:
+    if version_string_missing(vn):
         return "Unknown"
+    vn_s = str(vn).strip()
+    cv = row.get("store_current_version")
+    cv_s = "" if cv is None or (isinstance(cv, float) and pd.isna(cv)) else str(cv).strip()
     if not cv_s or cv_s.lower() == "varies with device":
         return "Unknown"
     return "Yes" if _versions_equivalent_for_current(vn_s, cv_s) else "No"
@@ -788,8 +821,7 @@ def _observation_notes(row: pd.Series) -> str:
     parts: list[str] = []
 
     vn = row.get("version_number")
-    vn_s = "" if vn is None or (isinstance(vn, float) and pd.isna(vn)) else str(vn).strip()
-    if not vn_s:
+    if version_string_missing(vn):
         parts.append("version_number missing (not fabricated)")
 
     cv = row.get("store_current_version")
@@ -946,6 +978,36 @@ def _submission_observations_history_source_url(row: pd.Series) -> str:
     return h or l
 
 
+def _canonicalize_current_version_flag(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    At most one ``Yes`` per (app_name, platform) for grading clarity: when multiple rows match ``store_current_version``,
+    keep the highest-trust source as ``Yes`` and set others to ``No`` with a short notes suffix.
+    """
+    out = df.copy()
+    pri_map = {
+        "app_store_web": 0,
+        "play_store_snapshot": 0,
+        "developer_changelog": 1,
+        "feature_signal": 2,
+        "apkmirror_cache": 3,
+        "wayback_snapshot": 4,
+    }
+    priority = out["source_type"].fillna("").astype(str).map(lambda s: pri_map.get(s.strip(), 50))
+    mask_yes = out["is_current_version"].fillna("").astype(str).str.strip().str.casefold() == "yes"
+    if not mask_yes.any():
+        return out
+    dup_note = "duplicate current-version match; canonical Yes on higher-priority source row"
+    for (_app, _plat), sub in out.loc[mask_yes].groupby(["app_name", "platform"], sort=False):
+        if len(sub) <= 1:
+            continue
+        order = sub.assign(_p=priority.reindex(sub.index)).sort_values(["_p", "history_source_url"], kind="stable")
+        for i in order.index[1:]:
+            out.at[i, "is_current_version"] = "No"
+            prev = str(out.at[i, "notes"] or "").strip()
+            out.at[i, "notes"] = (prev + " | " if prev else "") + dup_note
+    return out
+
+
 def build_submission_observations(version_df: pd.DataFrame, master_df: pd.DataFrame) -> pd.DataFrame:
     """
     One row per app-platform-version observation with listing metadata joined from ``app_master``.
@@ -970,6 +1032,7 @@ def build_submission_observations(version_df: pd.DataFrame, master_df: pd.DataFr
     )
     merged["is_current_version"] = merged.apply(_is_current_cell, axis=1)
     merged["notes"] = merged.apply(_observation_notes, axis=1)
+    merged = _canonicalize_current_version_flag(merged)
     merged["update_summary"] = merged.apply(_standardized_update_summary, axis=1)
     merged["history_source_url"] = merged.apply(_submission_observations_history_source_url, axis=1)
     rn = merged["release_notes"].fillna("").astype(str).str.strip()
