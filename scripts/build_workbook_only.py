@@ -75,6 +75,11 @@ def main() -> int:
         )
 
     print(f"Rebuilt deliverables from CSV cache (no scrape): {OUTPUT_DIR / out_name}")
+    locked = (OUTPUT_DIR / out_name).with_name(
+        f"{Path(out_name).stem}_locked{Path(out_name).suffix}"
+    )
+    if locked.is_file():
+        print(f"Read-only/Final copy (lightweight): {locked}")
     print(rep)
     return 0
 

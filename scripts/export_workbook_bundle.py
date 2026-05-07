@@ -7,9 +7,11 @@ Used after scraping (``run_pipeline.py``) or offline from cached CSVs (``build_w
 from __future__ import annotations
 
 import importlib.util
+import io
 import math
 import re
 import sys
+import zipfile
 from pathlib import Path
 
 import pandas as pd
@@ -219,10 +221,14 @@ def _apply_normalized_workbook_openpyxl_formatting(xlsx_path: Path) -> None:
         s = str(val)
         # Conservative wrap estimate so wrapped narrative rows are not clipped in Excel.
         chars_per_line = max(int(col_width * 0.76), 22)
-        lines = 1
+        lines = 0
         for para in s.splitlines():
             lines += max(1, math.ceil(len(para) / chars_per_line))
-        return float(min(409.0, max(15.0, 12.0 + lines * 14.5)))
+        # Tighter than before but still safe for wrap_text.
+        # Keep a small padding so glyph descenders don't clip.
+        base = 8.0
+        per_line = 12.8
+        return float(min(409.0, max(14.0, base + lines * per_line)))
 
     wb = load_workbook(xlsx_path)
 
@@ -358,14 +364,42 @@ def _apply_normalized_workbook_openpyxl_formatting(xlsx_path: Path) -> None:
         ws.column_dimensions["A"].width = _w_a
         ws.column_dimensions["B"].width = _w_b
         FONT_REPO = Font(name="Calibri", size=12, bold=True, color="0563C1", underline="single")
+        FILL_HDR_LITE = PatternFill(fill_type="solid", start_color="EEF2FF", end_color="EEF2FF")
+        key_headers = {
+            "Panel description",
+            "Approach",
+            "Main finding",
+            "What drives the shift (policy + disclosure)",
+            "Why this matters",
+            "What the data can and cannot show",
+            "Time-series patterns",
+            "Interesting patterns",
+            "Challenges",
+            "Data quality (auto)",
+            "Last updated",
+        }
         for r in range(1, ws.max_row + 1):
             ha = ws.cell(r, 1)
             hb = ws.cell(r, 2)
-            ha.font = FONT_BOLD
-            ha.fill = FILL_HDR
-            ha.alignment = AL_WRAP_TOP
+            a_txt = str(ha.value or "").strip()
+            b_txt = str(hb.value or "").strip()
+
+            # Column A: only style as header when it has content.
+            if not a_txt:
+                ha.font = FONT
+                ha.fill = FILL_WHITE
+                ha.alignment = AL_WRAP_TOP
+            else:
+                ha.font = FONT_BOLD
+                # Light header fill for scannability.
+                if a_txt in key_headers or r == 1:
+                    ha.fill = FILL_HDR_LITE
+                else:
+                    ha.fill = FILL_HDR
+                ha.alignment = AL_WRAP_TOP
             sec = ha.value
-            if sec == "GitHub repository":
+            # Layout-driven summary: row 1 contains the repo URL.
+            if r == 1:
                 hb.font = FONT_REPO
                 hb.fill = FILL_REPO_HIGHLIGHT
                 hb.alignment = AL_WRAP_TOP
@@ -374,12 +408,17 @@ def _apply_normalized_workbook_openpyxl_formatting(xlsx_path: Path) -> None:
                     hb.hyperlink = url
                     hb.value = url
             else:
+                # Policy subtitles live in column B with blank column A; render those in bold.
                 hb.font = FONT
                 hb.alignment = AL_WRAP_TOP
-            ws.row_dimensions[r].height = max(
-                _submission_summary_row_height(hb.value, col_width=_w_b),
-                _submission_summary_row_height(ha.value, col_width=_w_a),
-            )
+            # Compact blank spacer rows.
+            if (ha.value is None or str(ha.value).strip() == "") and (hb.value is None or str(hb.value).strip() == ""):
+                ws.row_dimensions[r].height = 8.0
+            else:
+                ws.row_dimensions[r].height = max(
+                    _submission_summary_row_height(hb.value, col_width=_w_b),
+                    _submission_summary_row_height(ha.value, col_width=_w_a),
+                )
 
     # --- charts ---
     if "charts" in wb.sheetnames:
@@ -401,6 +440,63 @@ def _apply_normalized_workbook_openpyxl_formatting(xlsx_path: Path) -> None:
             wb[sheet_name].sheet_properties.tabColor = tc
 
     wb.save(xlsx_path)
+
+
+def _patch_workbook_xml_read_only_recommended(xml: str) -> str:
+    """Insert or set ``fileSharing readOnlyRecommended`` in ``xl/workbook.xml`` (Excel: open read-only)."""
+    if re.search(r"<fileSharing\b[^>]*\breadOnlyRecommended\s*=", xml):
+        return re.sub(
+            r'readOnlyRecommended\s*=\s*"[^"]*"',
+            'readOnlyRecommended="true"',
+            xml,
+            count=1,
+        )
+    m = re.search(r"<workbook\b[^>]*>", xml, re.DOTALL)
+    if not m:
+        return xml
+    return xml[: m.end()] + '<fileSharing readOnlyRecommended="true"/>' + xml[m.end() :]
+
+
+def _patch_core_xml_mark_final(xml: str) -> str:
+    """Set ``cp:contentStatus`` to Final in ``docProps/core.xml`` (closer to File → Mark as Final)."""
+    if "<cp:contentStatus>" in xml:
+        return re.sub(
+            r"<cp:contentStatus>[^<]*</cp:contentStatus>",
+            "<cp:contentStatus>Final</cp:contentStatus>",
+            xml,
+            count=1,
+        )
+    if "</cp:coreProperties>" in xml:
+        return xml.replace(
+            "</cp:coreProperties>",
+            "<cp:contentStatus>Final</cp:contentStatus></cp:coreProperties>",
+            1,
+        )
+    return xml
+
+
+def write_lightweight_locked_xlsx_copy(editable_xlsx: Path, locked_xlsx: Path) -> None:
+    """
+    Produce a byte-identical-ish copy with lightweight Excel cues:
+
+    - Prompt to open **Read-Only** (workbook ``fileSharing`` flag).
+    - Core property **Final** (similar intent to Mark as Final).
+
+    Does not encrypt or enforce sheet protection; preserves all cells/formatting.
+    """
+    if not editable_xlsx.is_file():
+        return
+    buf = io.BytesIO()
+    with zipfile.ZipFile(editable_xlsx, "r") as zin, zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
+        for info in zin.infolist():
+            data = zin.read(info.filename)
+            if info.filename == "xl/workbook.xml":
+                data = _patch_workbook_xml_read_only_recommended(data.decode("utf-8")).encode("utf-8")
+            elif info.filename == "docProps/core.xml":
+                data = _patch_core_xml_mark_final(data.decode("utf-8")).encode("utf-8")
+            zout.writestr(info, data)
+    locked_xlsx.parent.mkdir(parents=True, exist_ok=True)
+    locked_xlsx.write_bytes(buf.getvalue())
 
 
 def export_workbook_bundle(
@@ -528,7 +624,8 @@ def export_workbook_bundle(
     with pd.ExcelWriter(xlsx, engine="openpyxl") as wr:
         submission_obs_df.to_excel(wr, sheet_name="version_history", index=False)
         master_df.to_excel(wr, sheet_name="app_index", index=False)
-        submission_df.to_excel(wr, sheet_name="summary", index=False)
+        # summary is a layout-driven dashboard (no header row)
+        submission_df.to_excel(wr, sheet_name="summary", index=False, header=False)
 
     try:
         from visualization_summary import try_append_visualization_sheet
@@ -538,5 +635,8 @@ def export_workbook_bundle(
         print(f"[warn] charts hook failed: {e}", file=sys.stderr)
 
     _apply_normalized_workbook_openpyxl_formatting(xlsx)
+
+    locked = xlsx.with_name(f"{xlsx.stem}_locked{xlsx.suffix}")
+    write_lightweight_locked_xlsx_copy(xlsx, locked)
 
     return rep

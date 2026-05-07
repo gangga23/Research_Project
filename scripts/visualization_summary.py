@@ -809,11 +809,11 @@ def append_visualization_sheet(xlsx_path: Path, version_df: pd.DataFrame) -> Non
     CHART_DIR = Path(__file__).parents[1] / "data" / "cache" / "charts"
     CHART_DIR.mkdir(parents=True, exist_ok=True)
 
-    def save_chart_png(fig, name: str, *, pad_inches: float = 0.06) -> Path:
+    def save_chart_png(fig, name: str, *, dpi: int = 96, pad_inches: float = 0.03) -> Path:
         path = CHART_DIR / f"{name}.png"
         fig.savefig(
             path,
-            dpi=150,
+            dpi=dpi,
             bbox_inches="tight",
             pad_inches=pad_inches,
             facecolor="white",
@@ -824,8 +824,9 @@ def append_visualization_sheet(xlsx_path: Path, version_df: pd.DataFrame) -> Non
 
     def embed_image(ws, path: Path, anchor: str, width_pt: float, height_pt: float) -> None:
         img = XLImage(str(path))
-        img.width = width_pt * 0.75  # pt to px at 96dpi
-        img.height = height_pt * 0.75
+        # openpyxl Image width/height are pixels.
+        img.width = int(width_pt * 96 / 72)
+        img.height = int(height_pt * 96 / 72)
         img.anchor = anchor
         ws.add_image(img)
 
@@ -845,131 +846,394 @@ def append_visualization_sheet(xlsx_path: Path, version_df: pd.DataFrame) -> Non
         wb.remove(wb[_SHEET])
     ws = wb.create_sheet(_SHEET)
 
-    # Basic readability for a wide canvas.
-    for col in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
-        ws.column_dimensions[col].width = 4.2
+    # Fixed grid + anchored PNGs (more stable than one giant image)
+    from openpyxl.utils import get_column_letter
+    from openpyxl.styles import PatternFill
 
-    # Header/context.
-    ws["A1"] = "Visualizations (Quick Scans)"
-    ws["A1"].font = Font(bold=True, size=16, color="111827")
-    ws.merge_cells("A1:N1")
+    def set_chart_grid(ws) -> None:
+        for col in range(1, 20):  # A..S
+            # Slightly wider grid prevents image overlap and improves readability.
+            ws.column_dimensions[get_column_letter(col)].width = 6.6
 
-    # Summary card as a PNG (more reliable than Excel wrapping).
-    def _summary_card_png() -> Path:
+        row_heights: dict[int, float] = {
+            1: 20,
+            2: 6,
+            3: 6,
+            4: 16,   # synopsis header
+            5: 26,   # synopsis lines (taller so wrapped bullets aren't clipped)
+            6: 26,
+            7: 26,
+            8: 26,
+            9: 26,
+            10: 26,
+            11: 10,
+            12: 16,
+        }
+        for r in range(13, 33):
+            row_heights[r] = 15
+        row_heights[33] = 10
+        row_heights[34] = 26  # heatmap comparability note (wrapped)
+        row_heights[35] = 8
+        row_heights[36] = 16
+        for r in range(37, 51):
+            row_heights[r] = 17  # slightly taller depth chart slot
+        row_heights[51] = 34  # wrapped note under chart 2 (2 lines)
+        row_heights[52] = 8   # spacer row between chart 2 note and chart 3
+        row_heights[53] = 16  # chart 3 title
+        row_heights[54] = 22  # wrapped small-multiples descriptor
+        row_heights[55] = 44  # shared legend row (chart 3)
+        row_heights[56] = 6
+        for r in range(57, 67):
+            row_heights[r] = 15
+        row_heights[67] = 8
+        for r in range(68, 81):
+            row_heights[r] = 15
+        row_heights[81] = 10
+        row_heights[82] = 10
+        row_heights[83] = 6
+        row_heights[84] = 6
+        row_heights[85] = 6
+        row_heights[86] = 14  # final note
+
+        for row, height in row_heights.items():
+            ws.row_dimensions[row].height = height
+
+    CHART_ANCHORS: dict[str, tuple[str, float, float]] = {
+        "ios_heatmap": ("A13", 320, 300),  # anchor, width_pt, height_pt
+        # Shift right heatmap start to avoid overlap with the left image.
+        "android_heatmap": ("K13", 320, 300),
+        "depth_chart": ("A37", 570, 240),
+        # Make panels slightly smaller; put shared legend on the right side.
+        "event_legend": ("A55", 200, 40),
+        "cat_bug": ("A57", 190, 180),
+        "cat_other": ("G57", 190, 180),
+        "cat_pay": ("M57", 190, 180),
+        "cat_ui": ("A71", 190, 180),
+        "cat_ai": ("G71", 190, 180),
+        "cat_creator": ("M71", 190, 180),
+    }
+
+    def embed_chart(ws, png_path: Path, anchor: str, width_pt: float, height_pt: float) -> None:
+        embed_image(ws, png_path, anchor, width_pt=width_pt, height_pt=height_pt)
+
+    set_chart_grid(ws)
+
+    # Text cells (written after grid, before embeds)
+    fill_hdr = PatternFill(fill_type="solid", start_color="EEF2FF", end_color="EEF2FF")
+    fill_note_red = PatternFill(fill_type="solid", start_color="FEE2E2", end_color="FEE2E2")
+    title_font = Font(bold=True, size=12, color="111827")
+    label_font = Font(bold=True, size=10, color="111827")
+    note_font = Font(size=9, italic=True, color="6B7280")
+    note_font_red = Font(size=9, italic=True, color="C00000")
+
+    ws["A1"] = "Dashboard — all charts"
+    ws["A1"].font = Font(bold=True, size=14, color="111827")
+    ws["A1"].fill = fill_hdr
+    ws.merge_cells("A1:S1")
+
+    bullets = build_automated_trend_synopsis(version_df)
+    ws["A4"] = "Automated trend synopsis (quick read)"
+    ws["A4"].font = label_font
+    ws["A4"].fill = fill_hdr
+    ws.merge_cells("A4:S4")
+    syn_lines = [("• " + str(b).strip().lstrip("•").strip()) for b in bullets if str(b).strip()]
+    for i in range(6):
+        ws[f"A{5+i}"] = syn_lines[i] if i < len(syn_lines) else ""
+        ws[f"A{5+i}"].font = Font(size=9, color="374151")
+        ws[f"A{5+i}"].alignment = Alignment(wrap_text=True, vertical="top")
+        ws.merge_cells(f"A{5+i}:S{5+i}")
+
+    ws["A12"] = "1. Cadence heatmaps (monthly update frequency)"
+    ws["A12"].font = title_font
+    ws["A12"].fill = fill_hdr
+    ws.merge_cells("A12:S12")
+
+    ws["A34"] = (
+        "Android has archive records back to 2013; heatmap clipped to iOS-comparable window (Apr 2025–May 2026). "
+        "Full Android depth shown in chart 2."
+    )
+    ws["A34"].font = note_font
+    ws["A34"].fill = fill_hdr
+    ws["A34"].alignment = Alignment(wrap_text=True, vertical="top")
+    ws.merge_cells("A34:S34")
+
+    ws["A36"] = (
+        "2. iOS vs Android dated evidence depth by app "
+        "(span of collected version rows with parseable release_date)"
+    )
+    ws["A36"].font = title_font
+    ws["A36"].fill = fill_hdr
+    ws.merge_cells("A36:S36")
+
+    ws["A51"] = (
+        "Span = max(release_date) − min(release_date) across collected version-history rows only; "
+        "0 means < 2 dated rows (collection depth, not app age).\n"
+        "Uber Android: 302 version records; 1 dated row recovered (APKMirror returns Cloudflare 403; "
+        "uploads listing page identified as future recovery path)."
+    )
+    ws["A51"].font = note_font_red
+    ws["A51"].fill = fill_note_red
+    ws["A51"].alignment = Alignment(wrap_text=True, vertical="top")
+    ws.merge_cells("A51:S51")
+
+    # Spacer row A52 intentionally left blank.
+
+    ws["A53"] = "3. Category share over time (monthly; 3-month moving average)"
+    ws["A53"].font = title_font
+    ws["A53"].fill = fill_hdr
+    ws.merge_cells("A53:S53")
+    ws["A54"] = (
+        "Small multiples: each panel is one update_category. Event markers are reference-only."
+    )
+    ws["A54"].font = Font(size=9, color="374151")
+    ws["A54"].fill = fill_hdr
+    ws["A54"].alignment = Alignment(wrap_text=True, vertical="top")
+    ws.merge_cells("A54:S54")
+
+    ws["A86"] = (
+        "Dashed lines are reference-only event windows. Use as discussion guide only — not causal proof."
+    )
+    ws["A86"].font = note_font
+    ws["A86"].fill = fill_hdr
+    ws.merge_cells("A86:S86")
+
+    # Colormap for heatmaps: 0 -> white, 1..20 -> YlOrRd
+    def _heatmap_cmap_norm():
+        import numpy as np
+        from matplotlib.colors import BoundaryNorm, ListedColormap
+
+        base = plt.get_cmap("YlOrRd")
+        colors = ["#ffffff"] + [base(i / 20.0) for i in range(1, 21)]
+        cmap = ListedColormap(colors, name="YlOrRd_0white")
+        bounds = np.arange(-0.5, 21.5, 1.0)
+        norm = BoundaryNorm(bounds, cmap.N, clip=True)
+        return cmap, norm
+
+    cmap, norm = _heatmap_cmap_norm()
+
+    def _make_heatmap(platform: str, *, title: str, out_name: str) -> Path | None:
         import textwrap
 
-        n = len(version_df)
-        plat = version_df.get("platform", pd.Series([""] * n)).astype(str)
-        ios_obs = int((plat == "iOS").sum())
-        and_obs = int((plat == "Android").sum())
-        dt = parse_release_dates(version_df)
-        ios_dated = int(((plat == "iOS") & dt.notna()).sum())
-        and_dated = int(((plat == "Android") & dt.notna()).sum())
-        v = version_df.get("version_number", pd.Series([""] * n)).fillna("").astype(str).str.strip()
-        ios_vpct = float((v[plat == "iOS"].ne("")).mean() * 100.0) if ios_obs else 0.0
-        and_vpct = float((v[plat == "Android"].ne("")).mean() * 100.0) if and_obs else 0.0
-        st = version_df.get("source_type", pd.Series([""] * n)).fillna("").astype(str)
-        ios_top = st[plat == "iOS"].value_counts().head(2)
-        and_top = st[plat == "Android"].value_counts().head(2)
-
-        bullets = build_automated_trend_synopsis(version_df)
-        syn = " ".join(("• " + str(b).strip().lstrip("•").strip()) for b in bullets if str(b).strip()).strip()
-        syn = "\n".join(textwrap.wrap(syn, width=160)) if syn else "(No synopsis — insufficient dated rows.)"
-
-        def _shorten(s: str, n: int = 64) -> str:
-            s = (s or "").strip()
-            return s if len(s) <= n else (s[: n - 1].rstrip() + "…")
-
-        fig = plt.figure(figsize=(12.5, 4.2))
-        ax = fig.add_axes([0, 0, 1, 1])
-        ax.axis("off")
-        ax.text(0.01, 0.93, "Quick metrics + synopsis", fontsize=14, fontweight="bold", color="#111827")
-        ax.text(
-            0.01,
-            0.86,
-            f"Same underlying rows as version_history ({n} observations; {ios_obs} iOS / {and_obs} Android; "
-            f"{int(dt.notna().sum())} dated).",
-            fontsize=10,
-            color="#374151",
+        # Clip to matched window for cadence comparison (Apr 2025–May 2026).
+        clip_start = pd.Timestamp("2025-04-01")
+        clip_end = pd.Timestamp("2026-05-31")
+        sub = dated_df_all[dated_df_all["platform"].astype(str).eq(platform)].copy()
+        sub = sub[(sub["month"] >= clip_start) & (sub["month"] <= clip_end)]
+        if sub.empty:
+            return None
+        # Ensure both platforms share the same month bins (including empty months).
+        months = pd.date_range(clip_start, clip_end, freq="MS")
+        piv = (
+            sub.groupby(["app_name", "month"])
+            .size()
+            .unstack(fill_value=0)
+            .sort_index(axis=0)
+            .sort_index(axis=1)
         )
+        piv = piv.reindex(columns=months, fill_value=0)
+        anchor_key = "ios_heatmap" if str(platform) == "iOS" else "android_heatmap"
+        width_pt, height_pt = CHART_ANCHORS[anchor_key][1], CHART_ANCHORS[anchor_key][2]
+        fig, ax = plt.subplots(figsize=(width_pt / 72, height_pt / 72), dpi=96)
+        im = ax.imshow(piv.to_numpy(), aspect="auto", cmap=cmap, norm=norm)
+        ax.set_title(title, fontsize=10)
+        ax.set_xlabel("")
+        ax.set_ylabel("")
+        ax.tick_params(axis="both", labelsize=8)
+        ax.set_yticks(range(len(piv.index)))
+        ax.set_yticklabels([str(x) for x in piv.index], fontsize=8)
+        ax.set_xticks(range(len(piv.columns)))
+        ax.set_xticklabels([pd.Timestamp(x).strftime("%b '%y") for x in piv.columns], rotation=45, ha="right", fontsize=8)
+        fig.colorbar(im, ax=ax, fraction=0.05, pad=0.02)
+        return save_chart_png(fig, out_name, dpi=96, pad_inches=0.02)
 
-        table_data = [
-            [
-                "iOS",
-                f"{ios_obs}",
-                f"{ios_dated}",
-                f"{ios_vpct:.0f}%",
-                _shorten(", ".join(f"{k} ({int(v)})" for k, v in ios_top.items()), 70),
-            ],
-            [
-                "Android",
-                f"{and_obs}",
-                f"{and_dated}",
-                f"{and_vpct:.0f}%",
-                _shorten(", ".join(f"{k} ({int(v)})" for k, v in and_top.items()), 70),
-            ],
+    def _make_depth(out_name: str) -> Path | None:
+        if dated_df_all.empty:
+            return None
+        spans = dated_df_all.groupby(["app_name", "platform"])["_dt"].agg(["min", "max"]).reset_index()
+        spans["span_days"] = (spans["max"] - spans["min"]).dt.days.astype(int)
+        ios_s = spans[spans["platform"] == "iOS"][["app_name", "span_days"]].rename(columns={"span_days": "ios"})
+        and_s = spans[spans["platform"] == "Android"][["app_name", "span_days"]].rename(columns={"span_days": "android"})
+        merged = pd.merge(ios_s, and_s, on="app_name", how="outer").fillna(0)
+        merged["android"] = merged["android"].astype(int)
+        merged["ios"] = merged["ios"].astype(int)
+        merged = merged.sort_values("android", ascending=False)
+        width_pt, height_pt = CHART_ANCHORS["depth_chart"][1], CHART_ANCHORS["depth_chart"][2]
+        fig, ax = plt.subplots(figsize=(width_pt / 72, height_pt / 72), dpi=96)
+        y = range(len(merged))
+        ax.barh([i + 0.18 for i in y], merged["ios"], height=0.35, color="#4472C4", label="iOS")
+        ax.barh([i - 0.18 for i in y], merged["android"], height=0.35, color="#ED7D31", label="Android")
+        ax.set_yticks(list(y))
+        ax.set_yticklabels(merged["app_name"].tolist(), fontsize=8)
+        ax.set_xlabel("Dated span in days", fontsize=8)
+        ax.set_title(
+            "iOS vs Android dated evidence depth by app\n"
+            "(span of collected version rows with parseable release_date)",
+            fontsize=10,
+        )
+        ax.axvline(365, color="#A3A3A3", linestyle="--", linewidth=0.8)
+        ax.text(365, len(merged) - 0.5, "1 year", color="#6B7280", fontsize=8, rotation=90, va="top", ha="right")
+        ax.legend(
+            loc="upper right",
+            fontsize=8,
+            frameon=True,
+            facecolor="white",
+            edgecolor="#D1D5DB",
+            framealpha=0.92,
+        )
+        ax.grid(True, axis="x", alpha=0.15)
+        fig.tight_layout()
+        return save_chart_png(fig, out_name, dpi=96, pad_inches=0.02)
+
+    def _make_category_panel(category: str, *, color: str, out_name: str, show_legend: bool) -> Path | None:
+        if dated_df_recent.empty:
+            return None
+        tot = dated_df_recent.groupby("month").size().rename("total").reset_index()
+        sub = (
+            dated_df_recent[dated_df_recent["update_category"].astype(str).eq(category)]
+            .groupby("month")
+            .size()
+            .rename("n")
+            .reset_index()
+        )
+        m = pd.merge(tot, sub, on="month", how="left").fillna({"n": 0})
+        m = m[m["total"] >= 5].copy()
+        if m.empty:
+            return None
+        m["share"] = (m["n"] / m["total"]) * 100.0
+        m["share_ma3"] = m["share"].rolling(3, min_periods=1).mean()
+        width_pt, height_pt = CHART_ANCHORS["cat_bug"][1], CHART_ANCHORS["cat_bug"][2]
+        fig, ax = plt.subplots(figsize=(width_pt / 72, height_pt / 72), dpi=96)
+        ax.plot(m["month"], m["share_ma3"], color=color, linewidth=1.3)
+        # Reference markers (colored).
+        ref = [
+            (pd.Timestamp("2025-09-01"), "Sep 2025 — iOS 18 / SDK deadline", "#2563EB"),
+            (pd.Timestamp("2025-11-01"), "Nov 2025 — holiday commercial window", "#16A34A"),
+            (pd.Timestamp("2026-01-01"), "Jan 2026 — TikTok US deadline", "#7C3AED"),
         ]
-        col_labels = ["Platform", "Observations", "Dated", "% w/ version", "Dominant source_type(s)"]
-        tbl = ax.table(
-            cellText=table_data,
-            colLabels=col_labels,
-            cellLoc="left",
-            colLoc="left",
-            bbox=[0.01, 0.54, 0.98, 0.26],
-        )
-        tbl.auto_set_font_size(False)
-        tbl.set_fontsize(10)
-        # Reduce wasted whitespace + prevent overflow by enforcing column widths.
-        col_widths = [0.12, 0.12, 0.08, 0.12, 0.56]
-        for (r, c), cell in tbl.get_celld().items():
-            if c < len(col_widths):
-                cell.set_width(col_widths[c])
-            if r == 0:
-                cell.set_text_props(weight="bold", color="#111827")
-                cell.set_facecolor("#F3F4F6")
-            else:
-                cell.set_text_props(color="#374151")
-            cell.set_edgecolor("#E5E7EB")
+        for dtx, _lab, col in ref:
+            ax.axvline(dtx, color=col, linestyle="--", linewidth=1.1, alpha=0.85)
+        ax.set_ylim(0, 70)
+        ax.set_title(category, fontsize=8.5, fontweight="normal")
+        ax.set_ylabel("Share (%)", fontsize=7.5)
+        ax.tick_params(axis="both", labelsize=7)
+        # Quarterly ticks (every 3 months) for readability.
+        start = pd.Timestamp(m["month"].min()).to_period("Q").start_time
+        end = pd.Timestamp(m["month"].max()).to_period("Q").start_time
+        ticks = list(pd.date_range(start, end, freq="QS"))
+        ax.set_xticks(ticks)
+        ax.set_xticklabels([t.strftime("%b '%y") for t in ticks], rotation=45, ha="right")
+        # One shared legend: render it once (first panel), not repeated.
+        if show_legend:
+            from matplotlib.lines import Line2D
 
-        ax.text(0.01, 0.49, "Automated trend synopsis (quick read):", fontsize=11, fontweight="bold", color="#111827")
-        ax.text(0.01, 0.45, syn, fontsize=10, color="#374151", va="top")
+            line_handles = [Line2D([0], [0], color=c, linestyle="--", linewidth=1.1) for _, _, c in ref]
+            ax.legend(
+                handles=line_handles,
+                labels=[lab for _, lab, _ in ref],
+                loc="upper left",
+                fontsize=6.5,
+                frameon=True,
+                facecolor="white",
+                edgecolor="#E5E7EB",
+                framealpha=0.92,
+                borderpad=0.35,
+                labelspacing=0.25,
+                handlelength=2.2,
+                handletextpad=0.5,
+            )
+        ax.grid(True, axis="y", alpha=0.15)
+        fig.tight_layout()
+        return save_chart_png(fig, out_name, dpi=96, pad_inches=0.02)
 
-        return save_chart_png(fig, "summary_card", pad_inches=0.03)
+    def _make_event_legend(out_name: str) -> Path:
+        """Standalone legend PNG so small-multiple panels stay uncluttered."""
+        import matplotlib.pyplot as plt
+        from matplotlib.lines import Line2D
 
-    p_sum = _summary_card_png()
-    embed_image(ws, p_sum, anchor="A2", width_pt=980, height_pt=260)
-
-    # Annotation card (Android coverage + marker legend) as PNG for stability.
-    def _annotation_card_png() -> Path:
-        # Compact figure + minimal padding to reduce white gaps in the saved PNG.
-        fig = plt.figure(figsize=(12.5, 2.0))
-        ax = fig.add_axes([0, 0, 1, 1])
+        width_pt, height_pt = CHART_ANCHORS["event_legend"][1], CHART_ANCHORS["event_legend"][2]
+        fig, ax = plt.subplots(figsize=(width_pt / 72, height_pt / 72), dpi=96)
         ax.axis("off")
-        ax.text(0.01, 0.92, "Notes & reference markers", fontsize=12, fontweight="bold", color="#111827")
-
-        ax.text(0.01, 0.74, "Android dated coverage:", fontsize=10, fontweight="bold", color="#111827")
-        ax.text(
-            0.23,
-            0.74,
-            "Cadence/share charts use only rows with parseable release_date. Many Android rows are listing/archive-derived\n"
-            "and lack dates, so gaps may reflect missing metadata—not fewer updates.",
-            fontsize=10,
-            color="#374151",
-            va="center",
+        ref = [
+            ("Sep 2025 — iOS 18 / App Store SDK deadline window", "#2563EB"),
+            ("Nov 2025 — holiday commercial window", "#16A34A"),
+            ("Jan 2026 — TikTok US deadline", "#7C3AED"),
+        ]
+        handles = [Line2D([0], [0], color=c, linestyle="--", linewidth=1.4) for _, c in ref]
+        labels = [lab for lab, _c in ref]
+        ax.legend(
+            handles=handles,
+            labels=labels,
+            loc="upper left",
+            fontsize=8,
+            frameon=True,
+            facecolor="white",
+            edgecolor="#E5E7EB",
+            framealpha=0.95,
+            borderpad=0.6,
+            labelspacing=0.8,
+            handlelength=3.0,
+            handletextpad=0.8,
         )
+        fig.tight_layout(pad=0.2)
+        return save_chart_png(fig, out_name, dpi=96, pad_inches=0.02)
 
-        ax.text(0.01, 0.42, "Category small-multiples markers:", fontsize=10, fontweight="bold", color="#111827")
-        ax.text(
-            0.33,
-            0.42,
-            "Dashed lines are reference-only anchors: 2025-09 (iOS 18), 2025-11 (Holiday window), 2026-01 (TikTok).\n"
-            "Shaded window (2026-01 → 2026-04) highlights the early-2026 period in our dataset where several series shift;\n"
-            "use it as a visual guide for discussing potential policy/event alignment, not as causal proof.",
-            fontsize=10,
-            color="#374151",
-            va="center",
+    # Generate + embed in order (exact requested)
+    ios_png = _make_heatmap("iOS", title="Cadence heatmap (monthly) — iOS", out_name="heatmap_ios_grid")
+    if ios_png:
+        a, w, h = CHART_ANCHORS["ios_heatmap"]
+        embed_chart(ws, ios_png, a, w, h)
+    and_png = _make_heatmap("Android", title="Cadence heatmap (monthly) — Android", out_name="heatmap_android_grid")
+    if and_png:
+        a, w, h = CHART_ANCHORS["android_heatmap"]
+        embed_chart(ws, and_png, a, w, h)
+
+    depth_png = _make_depth("depth_grid")
+    if depth_png:
+        a, w, h = CHART_ANCHORS["depth_chart"]
+        embed_chart(ws, depth_png, a, w, h)
+
+    cat_colors = {
+        "Bug fixes / performance improvements": "#1F3864",
+        "Other": "#ED7D31",
+        "Payments / monetization": "#375623",
+        "UI / design changes": "#C00000",
+        "AI-related features": "#7030A0",
+        "Creator tools / content features": "#833C00",
+    }
+    panels = [
+        ("cat_bug", "Bug fixes / performance improvements"),
+        ("cat_other", "Other"),
+        ("cat_pay", "Payments / monetization"),
+        ("cat_ui", "UI / design changes"),
+        ("cat_ai", "AI-related features"),
+        ("cat_creator", "Creator tools / content features"),
+    ]
+    for key, cat in panels:
+        png = _make_category_panel(
+            cat,
+            color=cat_colors[cat],
+            out_name=f"panel_{key}",
+            show_legend=False,
         )
-        return save_chart_png(fig, "annotation_card", pad_inches=0.02)
+        if png:
+            a, w, h = CHART_ANCHORS[key]
+            embed_chart(ws, png, a, w, h)
+
+    # Shared legend PNG (one time, bottom)
+    legend_png = _make_event_legend("event_markers_legend")
+    a, w, h = CHART_ANCHORS["event_legend"]
+    embed_chart(ws, legend_png, a, w, h)
+
+    wb.save(xlsx_path)
+
+    # CLEANUP: remove temporary PNGs after embedding.
+    for p in CHART_DIR.glob("*.png"):
+        try:
+            p.unlink()
+        except OSError:
+            pass
+
+    return
 
 
     def _heatmap(ax, piv: pd.DataFrame, title: str) -> None:
