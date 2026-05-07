@@ -14,7 +14,7 @@ uber_android,Uber,Android,"Uber Technologies, Inc.",Maps & Navigation,2010-10-28
 doordash_ios,DoorDash,iOS,"DoorDash, Inc.",Food & Drink,2013-10-10,https://apps.apple.com/us/app/id719972451,8.17.2,2026-05-05,
 doordash_android,DoorDash,Android,DoorDash,Food & Drink,2015-03-26,https://play.google.com/store/apps/details?id=com.dd.doordash&hl=en&gl=us,15.273.1,2026-05-04,
 paypal_ios,PayPal,iOS,"PayPal, Inc.",Finance,2019-02-03,https://apps.apple.com/us/app/id283646709,8.106.0,2026-05-04,
-paypal_android,PayPal,Android,PayPal Mobile,Finance,,https://play.google.com/store/apps/details?id=com.paypal.android.p2pmobile&hl=en&gl=us,8.105.1,2026-04-23,missing initial_release_date: google-play-scraper returned no parseable Play `released` field (can be substituted from iOS data as inference)
+paypal_android,PayPal,Android,PayPal Mobile,Finance,2010-10-26,https://newsroom.paypal-corp.com/2010-10-26-PayPal-TM-and-Developers-Push-Mobile-into-Mainstream,8.105.1,2026-04-23,Initial release date set as latest-by bound (Play Store unavailable via scraper).
 notion_ios,Notion,iOS,"Notion Labs, Incorporated",Productivity,2017-09-14,https://apps.apple.com/us/app/id1232780281,1.7.303,2026-05-05,
 notion_android,Notion,Android,"Notion Labs, Inc.",Productivity,2018-06-05,https://play.google.com/store/apps/details?id=notion.id&hl=en&gl=us,0.6.3836,2026-05-04,
 duolingo_ios,Duolingo,iOS,"Duolingo, Inc",Education,2012-11-13,https://apps.apple.com/us/app/id570060128,7.121.0,2026-05-05,

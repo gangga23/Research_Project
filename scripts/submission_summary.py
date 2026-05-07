@@ -6,6 +6,7 @@ insights derived from ``app_version_history``, and data-collection challenges.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 from pathlib import Path
@@ -45,14 +46,23 @@ def methodology_block(repo_url: str) -> str:
         "• Android — Play listing HTML + google-play-scraper; heuristic changelog strings from embedded JSON; "
         "Internet Archive CDX + archived Play pages (same heuristic). Optional RSS: feed_validator classifies "
         "release_feed vs product_blog; strict developer_changelog requires semver or explicit in-text date; "
-        "else feature_signal. review_inferred only when no higher-confidence structured signal.\n\n"
-        "• Deliverables — CSV + this workbook; every observation carries source_type, confidence_level, "
-        "update_category (rule-based single label).\n\n"
+        "else feature_signal. Optional APKMirror listing scrape (scripts/apkmirror_scraper.py --scrape) writes "
+        "data/cache/apkmirror_{app_id}.csv; pipeline ingests matching rows as source_type apkmirror_cache when "
+        "other structured paths are thin.\n\n"
+        "• Release dates — Store/Wayback dates where returned by those layers; APKMirror rows often use the listing "
+        "CSV Uploaded column or, when missing, optional detail-page resolution (scripts/apkmirror_upload_date.py). "
+        "Treat APKMirror timestamps as third-party upload metadata (proxy timing), not verified ship dates.\n\n"
+        "• Operational note — Bulk automated GETs to APKMirror detail pages are often throttled or blocked (HTTP "
+        "403). Highest practical ROI for dating APKMirror rows is refreshing listing CSVs via apkmirror_scraper.py "
+        "then re-running the pipeline so release_date is populated where the uploads listing exposes Uploaded; "
+        "detail-page backfill is best-effort only.\n\n"
+        "• Deliverables — CSV + this workbook; rows include source_type, confidence_level, update_category "
+        "(rule-based single label), has_release_notes (boolean; easier filtering than string comparisons).\n\n"
         "• Confidence_level (read with source_type) — High: structured live listing capture (Play snapshot row or "
         "App Store web embedded versionHistory / primary Lookup metadata). Medium: Wayback-archived Play HTML or "
         "iOS Lookup-only fallback when embedded history is thin. Low: vendor RSS/marketing lines classified as "
-        "feature_signal (no strict semver/date gate) or review-inferred timing when no stronger structured signal "
-        "exists.\n\n"
+        "feature_signal (no strict semver/date gate), APKMirror cache rows (third-party mirror metadata), or "
+        "review-inferred timing when no stronger structured signal exists.\n\n"
     )
 
 
@@ -82,13 +92,33 @@ def challenges_block(version_df: pd.DataFrame) -> str:
     miss_ver = 0.0
     if len(andf):
         miss_ver = 100.0 * float(andf["version_number"].fillna("").astype(str).str.strip().eq("").mean())
+
+    dt = parse_release_dates(version_df)
+    dated = dt.notna()
+    n_all = max(len(version_df), 1)
+    n_ios = version_df["platform"] == "iOS"
+    n_ad = version_df["platform"] == "Android"
+    ios_dated_pct = 100.0 * float((dated & n_ios).sum()) / max(int(n_ios.sum()), 1)
+    ad_dated_pct = 100.0 * float((dated & n_ad).sum()) / max(int(n_ad.sum()), 1)
+    rn_na_pct = 100.0 * float((version_df["release_notes"] == "Not available").sum()) / n_all
+
     tech = (
+        "• Assignment rubric fit — The panel satisfies matched iOS/Android brands, rubric columns (spreadsheet), "
+        "and automation-first collection. The main empirical limitation vs the brief (“timing and frequency over "
+        "time”) is uneven parseable release_date coverage across platforms: compare pct_ios_rows_parseable_release_date "
+        f"({ios_dated_pct:.1f}%) vs pct_android_rows_parseable_release_date ({ad_dated_pct:.1f}%) in Validation & "
+        "data quality. Restrict cadence and event-study claims to rows with release_date (and disclose subset sizes).\n\n"
         "• Coverage asymmetry: Android lacks a public multi-version changelog API comparable to the App Store web "
-        "embed; longitudinal depth depends on Wayback, feeds, and bounded review inference.\n\n"
+        "embed; longitudinal depth depends on Wayback, feeds, APKMirror listing CSVs, and bounded review inference.\n\n"
         f"• Android version_number is blank for {miss_ver:.0f}% of observations — genuine disclosure limits "
         "(Wayback snapshots, Play variant listings), not fabricated fillers. submission_observations » notes flags "
         "fabrication policy, Wayback date caveat, Play variant listings, and scrape anomalies only; exclude sparse-version "
         "rows from strict semver sequencing but retain for cadence/category reads.\n\n"
+        f"• Release notes sparsity — About {rn_na_pct:.0f}% of rows carry release_notes == \"Not available\"; "
+        "use has_release_notes == True when analyzing text-derived signals.\n\n"
+        "• APKMirror / bot protection — Listing and detail fetches may return HTTP 403 or Cloudflare challenges from "
+        "some networks; scripts/apkmirror_scraper.py persists progress in data/cache/apkmirror_status.json "
+        "(complete / partial / blocked). Do not assume all APKMirror rows can be dated programmatically.\n\n"
         "• Layout drift: Play/App Store HTML and JSON shapes change; heuristics need maintenance.\n\n"
         "• Wayback: uneven capture by app/period; CDX/network noise reduces snapshots without failing the run.\n\n"
         "• RSS gates: semver/date rules limit false version rows but split vendor narrative across "
@@ -210,6 +240,15 @@ def _timeseries_insights_lede(version_df: pd.DataFrame) -> str:
     if sub is None:
         return "No parseable release_date values — time-series findings below are unavailable for this export."
 
+    ios_n = int((version_df["platform"] == "iOS").sum())
+    ad_n = int((version_df["platform"] == "Android").sum())
+    sub_ios = int((sub["platform"] == "iOS").sum())
+    sub_ad = int((sub["platform"] == "Android").sum())
+    asymmetry = (
+        f"Dated-row coverage for time-series: iOS {sub_ios}/{max(ios_n, 1)} observations vs Android "
+        f"{sub_ad}/{max(ad_n, 1)} — interpret platform comparisons cautiously.\n\n"
+    )
+
     s = sub.sort_values("_dt").reset_index(drop=True)
     q = len(s) // 4
     bug_pp = None
@@ -229,7 +268,7 @@ def _timeseries_insights_lede(version_df: pd.DataFrame) -> str:
             "Category evolution is present but modest on headline buckets; interpret update_category as disclosure, not ground-truth engineering work."
         )
 
-    return " ".join(parts)
+    return asymmetry + " ".join(parts)
 
 
 def build_timeseries_insights(version_df: pd.DataFrame) -> str:
@@ -258,20 +297,31 @@ def finance_hypothesis_block() -> str:
     )
 
 
-def recommended_analysis_subset_block() -> str:
+def recommended_analysis_subset_block(version_df: pd.DataFrame) -> str:
     """
     Explicit defaults for empirical use vs robustness checks.
     This does not change the data; it only clarifies recommended filters.
     """
+    dt = parse_release_dates(version_df)
+    dated = dt.notna()
+    n = max(len(version_df), 1)
+    nd = int(dated.sum())
     return (
         "Recommended empirical subset (default):\n"
-        "• Keep rows with source_type in {app_store_web, developer_changelog}.\n"
-        "• Keep release_notes != \"Not available\" and release_date present when doing cadence/time-series models.\n"
-        "• Optionally require confidence_level == high for strictest estimates.\n\n"
+        "• Strict structured subset — iOS: source_type == app_store_web; Android: source_type in "
+        "{play_store_snapshot, developer_changelog}. Always require parseable release_date for cadence or "
+        "event-study.\n"
+        f"• This export has {nd}/{n} rows with parseable release_date overall (see Validation & data quality for "
+        "iOS vs Android breakdown).\n"
+        "• Text-heavy analyses — require has_release_notes == True (avoids treating placeholder strings as content).\n"
+        "• Optional tighten — confidence_level == high for store/API-structured rows only.\n\n"
         "Robustness / sensitivity:\n"
-        "• Add wayback_snapshot (medium) to test dependence on archive coverage.\n"
-        "• Treat feature_signal as weak disclosure evidence; include only in robustness and report separately.\n"
-        "• Exclude review_inferred unless you are explicitly studying missingness / inference bias."
+        "• Add wayback_snapshot (medium) when studying archive dependence on Android.\n"
+        "• apkmirror_cache rows — use only with explicit caveat (third-party mirror; dates often APKMirror "
+        "Uploaded metadata); prefer refreshed listing CSVs + pipeline over bulk detail-page backfill when "
+        "HTTP 403 is common.\n"
+        "• Treat feature_signal as weak disclosure evidence; report separately.\n"
+        "• Exclude review_inferred unless studying missingness / inference bias."
     )
 
 
@@ -306,10 +356,16 @@ def validation_data_summary_block(validation_text: str, data_quality_text: str) 
     d_keep = _pick(
         d_lines,
         (
+            "pct_all_rows_parseable_release_date:",
+            "rows_parseable_release_date_all_platforms:",
+            "pct_ios_rows_parseable_release_date:",
+            "pct_android_rows_parseable_release_date:",
+            "pct_android_apkmirror_cache_rows_parseable_release_date:",
             "pct_all_rows_app_store_web:",
             "pct_android_play_store_snapshot_rows:",
             "pct_android_wayback_snapshot_rows:",
             "pct_android_developer_changelog_rows:",
+            "pct_android_apkmirror_cache_rows:",
             "pct_android_feature_signal_rows:",
             "pct_android_review_inferred_rows:",
             "pct_android_missing_version_number:",
@@ -345,18 +401,38 @@ def build_submission_summary_dataframe(
     else:
         span = "n/a"
     repo_line = repo_url if repo_url else "https://github.com/gangga23/Research_Project"
+    dt_o = parse_release_dates(version_df)
+    dated_o = dt_o.notna()
+    n_tot = max(len(version_df), 1)
+    nd_o = int(dated_o.sum())
+    ios_m = version_df["platform"] == "iOS"
+    ad_m = version_df["platform"] == "Android"
+    ios_nd = int((dated_o & ios_m).sum())
+    ad_nd = int((dated_o & ad_m).sum())
+    ios_ct = max(int(ios_m.sum()), 1)
+    ad_ct = max(int(ad_m.sum()), 1)
     overview = (
         f"Cross-platform panel covering {n_config_apps} matched iOS/Android app pairs, {len(version_df)} "
-        f"version-history observations spanning {span}. Each row is tied to a verifiable source and confidence level, "
-        "enabling evaluators to subset to high-credibility paths before drawing product or policy inferences.\n\n"
-        f"Repository: {repo_line}"
+        f"version-history observations spanning {span}. Each row ties to a verifiable history_source_url, "
+        "source_type, confidence_level, update_category, update_summary, optional notes, and has_release_notes.\n\n"
+        "Strengths vs assignment brief — Matched brands across platforms; diverse categories; automation-first pipeline "
+        "(scripts/APIs/scraping; no LLM-authored store text); workbook plus CSVs suitable for spreadsheet grading; "
+        "standardized categories aligned with the rubric; iOS paths typically yield strong multi-version history where "
+        "App Store web parsing succeeds.\n\n"
+        "Weaknesses / caveats — Timing-and-frequency claims require parseable release_date; coverage is asymmetric "
+        f"(this export: {nd_o}/{n_tot} rows dated overall; iOS {ios_nd}/{ios_ct}, Android {ad_nd}/{ad_ct}). "
+        "Many Android observations rely on archives, feeds, or APKMirror listing CSVs; APKMirror timestamps reflect "
+        "third-party upload metadata when present, not audited ship dates. Sparse release_notes limits qualitative "
+        "\"nature of update\" analysis unless filtered with has_release_notes. Cloudflare or HTTP 403 may limit "
+        "APKMirror refresh or detail backfill from some environments."
     )
     rows = [
+        ("GitHub repository", repo_line),
         ("Overview", overview),
         ("Key counts (auto)", _metrics_block_for_summary(version_df)),
         ("Data collection approach", methodology_block(repo_url)),
         ("Validation & data quality (auto)", validation_data_summary_block(validation_text, data_quality_text)),
-        ("Recommended analysis subset (for empirical models)", recommended_analysis_subset_block()),
+        ("Recommended analysis subset (for empirical models)", recommended_analysis_subset_block(version_df)),
         ("Time-series insights (automated)", build_timeseries_insights(version_df)),
         ("Finance-relevant hypothesis (testable)", finance_hypothesis_block()),
         ("Challenges and limitations", challenges_block(version_df)),
@@ -540,6 +616,7 @@ SUBMISSION_OBSERVATION_COLUMN_ORDER: tuple[str, ...] = (
     "store_current_version_release_date",
     "history_source_url",
     "release_notes",
+    "has_release_notes",
     "update_category",
     "update_summary",
     "source_type",
@@ -588,92 +665,37 @@ def build_submission_observations(version_df: pd.DataFrame, master_df: pd.DataFr
     merged["notes"] = merged.apply(_observation_notes, axis=1)
     merged["update_summary"] = merged.apply(_standardized_update_summary, axis=1)
     merged["history_source_url"] = merged.apply(_submission_observations_history_source_url, axis=1)
+    rn = merged["release_notes"].fillna("").astype(str).str.strip()
+    merged["has_release_notes"] = rn.ne("") & rn.ne("Not available")
     if "_dq_pipeline_note" in merged.columns:
         merged = merged.drop(columns=["_dq_pipeline_note"])
     return merged[list(SUBMISSION_OBSERVATION_COLUMN_ORDER)]
 
 
-def build_cover_sheet_dataframe(repo_url: str, *, n_apps: int, n_obs: int) -> pd.DataFrame:
-    """Evaluator-facing guide: sheet map + rubric column mapping + repo link."""
-    repo_line = (
-        repo_url
-        if repo_url
-        else "Set config/project_meta.json » repository_url (or env SUBMISSION_GITHUB_REPO_URL)."
-    )
-    sheets = (
-        "COVER — this guide.\n\n"
-        "submission_observations — primary submission table (denormalized). One row per observation; aligns with "
-        "the assignment rubric columns.\n\n"
-        "app_master — per-platform listing snapshot (developer, category, initial release, store current version, "
-        "listing URL; optional notes when the store scrape omits initial_release_date).\n\n"
-        "app_version_history — same observations as submission_observations without duplicated master fields; "
-        "useful for joins or audits.\n\n"
-        "submission_summary — methodology, automated time-series commentary, quick-scan dashboard bullets "
-        "(density / cadence / provenance / quartile trends), challenges + confidence interpretation.\n\n"
-        "timeseries_metrics — key counts derived from version history.\n\n"
-        "viz_fast_scan — synopsis bullets mirroring Time-series insights; monthly cadence heatmaps (iOS/Android); "
-        "URL-class profile from history_source_url (Wayback vs APKMirror vs store listing); observation depth by "
-        "app/platform (dated span); quartile category-share slope chart — requires matplotlib.\n\n"
-        "validation / data_quality / field_schema — pipeline diagnostics and schema reference."
-    )
-    mapping = (
-        "App name → app_name\n"
-        "Platform → platform\n"
-        "Developer / company → developer\n"
-        "App category → category\n"
-        "Version number → version_number\n"
-        "Version release/update date → release_date\n"
-        "Whether this is the current version → is_current_version (Yes | No | Unknown)\n"
-        "Initial app release date → initial_release_date\n"
-        "Update description / release notes → release_notes\n"
-        "Standardized update category → update_category (single best-fit label per rubric; multi-signal updates default to primary cue)\n"
-        "Brief standardized summary for variables → update_summary (short_code:primary_descriptor; plain text for coding)\n"
-        "Source of update history (clickable URL in Excel) → history_source_url "
-        "(Wayback capture, feed/APKMirror permalink when present for that row; else store listing URL)\n"
-        "Listing snapshot: store-reported current version + date → store_current_version, "
-        "store_current_version_release_date\n"
-        "Observation provenance → source_type, confidence_level\n"
-        "Data quality flags only (pipe-separated) → notes"
-    )
-    join_txt = (
-        "submission_observations is produced by merging app_version_history with app_master on app_id (stable per "
-        "app_name + platform). No additional manual join is required for grading."
-    )
-    caveats = (
-        "Android observation rows may lack version_number or use archive-backed dates (see source_type). "
-        "submission_observations » notes (pipe-separated): blank version → not fabricated; wayback_snapshot → archive "
-        "date caveat; Varies with device listing → Play variant caveat; plus contamination/anomaly text when present."
-    )
-    rows = [
-        ("Title", "Matched iOS / Android app update history — submission workbook"),
-        ("Panel size", f"{n_apps} apps × 2 platforms; {n_obs} version-history observations in this export."),
-        ("Start here", "Filter and analyze submission_observations first; read submission_summary for methodology."),
-        ("Sheet guide", sheets),
-        ("Rubric → columns (submission_observations)", mapping),
-        ("Join logic", join_txt),
-        ("Interpretation caveats", caveats),
-        ("Code repository", repo_line),
-    ]
-    return pd.DataFrame(rows, columns=["Section", "Details"])
-
-
 def apply_submission_sheet_style(path: Path, sheet_names: tuple[str, ...]) -> None:
-    """Fixed column widths (``ColumnDimension.width`` only), wrap column B, top alignment; clear fixed row heights."""
+    """Submission summary: wrap columns A–B, fixed widths, estimated row heights so text is not clipped."""
     try:
         from openpyxl import load_workbook
-        from openpyxl.styles import Alignment, Font
+        from openpyxl.styles import Alignment, Font, PatternFill
     except ImportError:
         return
 
+    def _submission_summary_row_height(val: object, *, col_width: float) -> float:
+        """Match ``export_workbook_bundle._apply_normalized_workbook_openpyxl_formatting`` estimates."""
+        if val is None:
+            return 15.0
+        s = str(val)
+        chars_per_line = max(int(col_width * 0.76), 22)
+        lines = 1
+        for para in s.splitlines():
+            lines += max(1, math.ceil(len(para) / chars_per_line))
+        return float(min(409.0, max(15.0, 12.0 + lines * 14.5)))
+
     wb = load_workbook(path)
     bold_header = Font(bold=True)
-    align_top_left = Alignment(
-        horizontal="left",
-        vertical="top",
-        wrap_text=False,
-        shrink_to_fit=False,
-    )
-    align_top_wrap_b = Alignment(
+    fill_repo = PatternFill(fill_type="solid", start_color="FFFACD", end_color="FFFACD")
+    font_repo = Font(bold=True, size=12, color="0563C1", underline="single")
+    align_top_wrap = Alignment(
         horizontal="left",
         vertical="top",
         wrap_text=True,
@@ -691,19 +713,33 @@ def apply_submission_sheet_style(path: Path, sheet_names: tuple[str, ...]) -> No
         if name not in wb.sheetnames:
             continue
         ws = wb[name]
-        if name in ("COVER", "submission_summary"):
-            _lock_col_width(ws.column_dimensions["A"], 28)
-            _lock_col_width(ws.column_dimensions["B"], 80)
+        if name == "submission_summary":
+            w_a, w_b = 28.0, 92.0
+            _lock_col_width(ws.column_dimensions["A"], w_a)
+            _lock_col_width(ws.column_dimensions["B"], w_b)
             _clear_fixed_row_heights(ws)
             for r_idx, row in enumerate(ws.iter_rows(min_row=1, max_row=ws.max_row), start=1):
                 for cell in row:
                     col_idx = cell.column
-                    if col_idx == 2:
-                        cell.alignment = align_top_wrap_b
-                    else:
-                        cell.alignment = align_top_left
+                    cell.alignment = align_top_wrap
                     if r_idx == 1 or col_idx == 1:
                         cell.font = bold_header
+            for r in range(1, ws.max_row + 1):
+                ha = ws.cell(r, 1)
+                hb = ws.cell(r, 2)
+                ws.row_dimensions[r].height = max(
+                    _submission_summary_row_height(hb.value, col_width=w_b),
+                    _submission_summary_row_height(ha.value, col_width=w_a),
+                )
+            for r in range(1, ws.max_row + 1):
+                if ws.cell(r, 1).value != "GitHub repository":
+                    continue
+                hb = ws.cell(r, 2)
+                hb.fill = fill_repo
+                hb.font = font_repo
+                url = str(hb.value or "").strip()
+                if url.startswith(("http://", "https://")):
+                    hb.hyperlink = url
         elif name == "submission_observations":
             ws.freeze_panes = "A2"
         elif name == "timeseries_metrics":

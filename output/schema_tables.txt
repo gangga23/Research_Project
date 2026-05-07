@@ -3,7 +3,7 @@ TABLE submission_observations (assignment-aligned denormalized export)
   version_number, release_date, is_current_version (Yes | No | Unknown),
   store_current_version, store_current_version_release_date,
   history_source_url (single clickable source URL: Wayback/feed/APKMirror row URL when https; else store listing),
-  release_notes, update_category, update_summary, source_type, confidence_level, notes
+  release_notes, has_release_notes, update_category, update_summary, source_type, confidence_level, notes
 
 TABLE app_master
   app_id, app_name, platform, developer, category, initial_release_date,
@@ -14,6 +14,7 @@ TABLE app_version_history
   version_number (empty string when unknown; never fabricated)
   release_date (ISO YYYY-MM-DD or empty)
   release_notes (cleaned; Not available when absent)
+  has_release_notes (boolean; True when release_notes is substantive)
   history_source_url (listing/Wayback/feed scrape URL; APKMirror permalink when matched from data/cache)
   source_type (strict):
     - play_store_snapshot | wayback_snapshot | developer_changelog |
@@ -25,6 +26,6 @@ TABLE app_version_history
 Android: Play live HTML+app() snapshot (high) → Wayback archived Play pages
 (medium) → optional feed URL: validator classifies feed; matching items become
 developer_changelog, non-matching items feature_signal → optional
-data/cache/apkmirror_{app_id}.csv rows as apkmirror_cache (medium) → review_inferred (low)
+data/cache/apkmirror_{app_id}.csv rows as apkmirror_cache (low) → review_inferred (low)
 only if none of the above yield structured signal (including APKMirror cache).
 iOS: app_store_web embedded versionHistory (high) or lookup-only fallback (medium).

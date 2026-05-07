@@ -37,6 +37,7 @@ from app_store_web_history import (
     wayback_list_timestamps,
 )
 from export_workbook_bundle import export_workbook_bundle
+from timeseries_insights_core import parse_release_dates
 
 CONFIG_PATH = ROOT / "config" / "apps.json"
 OUTPUT_DIR = ROOT / "output"
@@ -542,7 +543,7 @@ def schema_text() -> str:
   version_number, release_date, is_current_version (Yes | No | Unknown),
   store_current_version, store_current_version_release_date,
   history_source_url (single clickable source URL: Wayback/feed/APKMirror row URL when https; else store listing),
-  release_notes, update_category, update_summary, source_type, confidence_level, notes
+  release_notes, has_release_notes, update_category, update_summary, source_type, confidence_level, notes
 
 TABLE app_master
   app_id, app_name, platform, developer, category, initial_release_date,
@@ -553,6 +554,7 @@ TABLE app_version_history
   version_number (empty string when unknown; never fabricated)
   release_date (ISO YYYY-MM-DD or empty)
   release_notes (cleaned; Not available when absent)
+  has_release_notes (boolean; True when release_notes is substantive)
   history_source_url (listing/Wayback/feed scrape URL; APKMirror permalink when matched from data/cache)
   source_type (strict):
     - play_store_snapshot | wayback_snapshot | developer_changelog |
@@ -564,7 +566,7 @@ TABLE app_version_history
 Android: Play live HTML+app() snapshot (high) → Wayback archived Play pages
 (medium) → optional feed URL: validator classifies feed; matching items become
 developer_changelog, non-matching items feature_signal → optional
-data/cache/apkmirror_{app_id}.csv rows as apkmirror_cache (medium) → review_inferred (low)
+data/cache/apkmirror_{app_id}.csv rows as apkmirror_cache (low) → review_inferred (low)
 only if none of the above yield structured signal (including APKMirror cache).
 iOS: app_store_web embedded versionHistory (high) or lookup-only fallback (medium).
 """
@@ -605,6 +607,16 @@ def data_quality_report(version_df: pd.DataFrame, n_config_apps: int, master_row
     miss_ver = 100.0 * float(mv.sum()) / na
 
     ios = version_df[version_df["platform"] == "iOS"]
+    dt = parse_release_dates(version_df)
+    dated_mask = dt.notna()
+    dated_n = int(dated_mask.sum())
+    ios_n = max(len(ios), 1)
+    android_n = max(len(ad), 1)
+    ios_dated = int(dated_mask[version_df["platform"] == "iOS"].sum())
+    android_dated = int(dated_mask[version_df["platform"] == "Android"].sum())
+    apk_mask = (version_df["platform"] == "Android") & (version_df["source_type"] == "apkmirror_cache")
+    apk_n = int(apk_mask.sum())
+    apk_dated = int(dated_mask[apk_mask].sum()) if apk_n else 0
     lines = [
         "data_quality_report",
         f"config_apps: {n_config_apps}",
@@ -612,6 +624,20 @@ def data_quality_report(version_df: pd.DataFrame, n_config_apps: int, master_row
         f"app_version_history_rows: {n}",
         f"ios_rows: {len(ios)}",
         f"android_rows: {len(ad)}",
+        f"rows_parseable_release_date_all_platforms: {dated_n}",
+        f"pct_all_rows_parseable_release_date: {100.0 * float(dated_n) / max(n, 1):.1f}%",
+        f"ios_rows_parseable_release_date: {ios_dated}",
+        f"pct_ios_rows_parseable_release_date: {100.0 * float(ios_dated) / ios_n:.1f}%",
+        f"android_rows_parseable_release_date: {android_dated}",
+        f"pct_android_rows_parseable_release_date: {100.0 * float(android_dated) / android_n:.1f}%",
+        f"android_apkmirror_cache_rows: {apk_n}",
+        f"android_apkmirror_cache_rows_parseable_release_date: {apk_dated}",
+        (
+            f"pct_android_apkmirror_cache_rows_parseable_release_date: "
+            f"{100.0 * float(apk_dated) / max(apk_n, 1):.1f}%"
+            if apk_n
+            else "pct_android_apkmirror_cache_rows_parseable_release_date: n/a"
+        ),
         f"pct_all_rows_app_store_web: {100.0 * len(ios) / max(n, 1):.1f}%",
         f"pct_android_play_store_snapshot_rows: {p_play:.1f}%",
         f"pct_android_wayback_snapshot_rows: {p_way:.1f}%",

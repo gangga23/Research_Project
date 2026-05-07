@@ -205,6 +205,19 @@ def _extract_version_and_date(app_row: Any) -> tuple[str, str]:
         version_number = ver_spans[0].get_text(strip=True)
 
     uploaded = ""
+    # Newer APKMirror uploads layout uses infoSlide-name/value pairs.
+    if not uploaded:
+        for p in app_row.select("p"):
+            lab = p.select_one(".infoSlide-name")
+            val = p.select_one(".infoSlide-value")
+            if not lab or not val:
+                continue
+            if "upload" not in lab.get_text(strip=True).lower():
+                continue
+            uploaded = val.get_text(" ", strip=True)
+            if uploaded:
+                break
+
     for slide in app_row.select("div.metaSlide"):
         lab = slide.select_one(".metaSlide-label")
         val = slide.select_one(".metaSlide-value")

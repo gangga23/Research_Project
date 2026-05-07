@@ -197,11 +197,12 @@ def _chart_update_frequency_heatmap_platform(
     since: pd.Timestamp | None = None,
     fill_period_bins_since: pd.Timestamp | None = None,
     fill_end: pd.Timestamp | None = None,
+    cmap=None,
 ) -> io.BytesIO | None:
     """
     Cadence heatmap for a single platform (dated rows).
     Rows: app_name; columns: YYYY-MM or YYYYQn; values: observation counts.
-    Use the same ``vmax`` for iOS and Android so color means the same count on both charts.
+    Use the same ``vmax`` and default colormap for iOS and Android so numeric and hue scaling match.
     ``vmax`` is normally capped (see ``CADENCE_HEATMAP_VMAX_CAP``) so low/mid counts show more hue spread.
     """
     import matplotlib.pyplot as plt
@@ -223,14 +224,17 @@ def _chart_update_frequency_heatmap_platform(
         return None
     mat, xlabels, apps = block
 
-    # +20% font sizes globally (Excel zoom variability).
-    base_fs = 10
-    fs_title = int(base_fs * 1.44)
-    fs_sub = int(base_fs * 1.15)
-    fs_axis = int(base_fs * 1.2)
-    fs_tick_y = int(base_fs * 1.05)
-    fs_tick_x = int(base_fs * 0.95)
-    fs_cbar = int(base_fs * 1.25)
+    if cmap is None:
+        cmap = _cadence_heatmap_colormap()
+
+    # Larger fonts for heatmap readability in Excel.
+    base_fs = 13
+    fs_plot_title = int(base_fs * 1.72)
+    fs_sub = int(base_fs * 1.12)
+    fs_axis = int(base_fs * 1.15)
+    fs_tick_y = int(base_fs * 1.08)
+    fs_tick_x = int(base_fs * 1.02)
+    fs_cbar = int(base_fs * 1.18)
 
     # Fixed requested geometry so heatmaps match across exports.
     fig, ax = plt.subplots(figsize=(16, 7))
@@ -241,10 +245,10 @@ def _chart_update_frequency_heatmap_platform(
         CADENCE_HEATMAP_VMAX_CAP,
         max(1.0, float(np.ceil(float(mat.max())))),
     )
-    im = ax.imshow(mat, aspect="auto", cmap=_cadence_heatmap_colormap(), vmin=0, vmax=vm)
+    im = ax.imshow(mat, aspect="auto", cmap=cmap, vmin=0, vmax=vm)
     cbar_extend = "max" if float(mat.max()) > vm + 1e-9 else "neither"
     # Keep titles aligned so tight-cropping doesn't produce different PNG geometry per platform.
-    ax.set_title(title, fontsize=fs_title, pad=14)
+    ax.set_title(title, fontsize=fs_plot_title, pad=14)
     ax.text(
         0.0,
         1.01,
@@ -271,7 +275,7 @@ def _chart_update_frequency_heatmap_platform(
     cbar.set_ticks(np.linspace(0.0, float(vm), num=nticks))
     cbar.ax.tick_params(labelsize=int(fs_cbar * 0.9))
     # Fixed margins + no bbox_inches='tight' => consistent PNG geometry for iOS/Android.
-    fig.subplots_adjust(left=0.23, right=0.985, top=0.88, bottom=0.18)
+    fig.subplots_adjust(left=0.24, right=0.985, top=0.88, bottom=0.18)
     buf = io.BytesIO()
     fig.savefig(
         buf,
@@ -419,137 +423,109 @@ def _chart_category_evolution_quartile_buckets(version_df: pd.DataFrame) -> io.B
     for i, k in enumerate(keys):
         palette.append(BUGFIX_COLOR if k == BUGFIX_KEY else tab(i % 10))
 
-    # Plot
-    fig, ax = plt.subplots(figsize=(9.6, 5.6))
-    fig.patch.set_facecolor("#ffffff")
-    ax.set_facecolor("#ffffff")
-    fs_axis = 12
-    fs_leg = 10
+    # Smooth shares with a 3-month moving average to reduce spike noise.
+    shares_sm = shares.copy()
+    for k in keys:
+        shares_sm[k] = shares_sm[k].astype(float).rolling(window=3, min_periods=1).mean()
 
     xs = np.arange(len(months))
     masked_xs = np.where(valid_mask, xs, np.nan)
 
-    for idx, (k, label, color) in enumerate(zip(keys, short, palette)):
-        is_bugfix = k == BUGFIX_KEY
-        ys_full = shares[k].astype(float).values
-        ys_masked = np.where(valid_mask, ys_full, np.nan)
-        ax.plot(
-            masked_xs,
-            ys_masked,
-            marker="o",
-            markersize=4.4 if is_bugfix else 3.2,
-            linewidth=2.5 if is_bugfix else 1.2,
-            color=color,
-            label=label + (" (key finding)" if is_bugfix else ""),
-            solid_capstyle="round",
-            zorder=4 if is_bugfix else 3,
-        )
-
-    # Light grey shading on excluded (sparse) months.
-    sparse_idx = np.where(~valid_mask)[0]
-    for i in sparse_idx:
-        ax.axvspan(i - 0.5, i + 0.5, color="#f1f5f9", alpha=0.6, zorder=0)
-
-    # X ticks: monthly with quarterly labels for readability.
-    tick_idx = [i for i, m in enumerate(months) if m.endswith(("-01", "-04", "-07", "-10"))]
-    if not tick_idx:
-        tick_idx = list(range(0, len(months), 3))
-    tick_lbl = [_compact_month_tick_label(months[i]) for i in tick_idx]
-    ax.set_xticks(tick_idx)
-    ax.set_xticklabels(tick_lbl, rotation=0, ha="center", fontsize=fs_axis, color="#374151")
-    ax.set_xlim(-0.5, len(months) - 0.5)
+    # Faceted small-multiples: one mini chart per update_category (more readable than a crowded legend).
+    nkeys = len(keys)
+    # Keep a 3×2 dashboard-friendly facet grid, but make it taller so panels are readable.
+    ncols = 3 if nkeys >= 4 else nkeys
+    nrows = int(math.ceil(nkeys / ncols))
+    fig_w = 12.8 if ncols == 3 else 8.6
+    fig_h = 3.6 + 3.3 * nrows
+    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(fig_w, fig_h), sharex=True, sharey=True)
+    fig.patch.set_facecolor("#ffffff")
+    axes_arr = np.array(axes).reshape(-1)
+    fs_axis = 10
 
     # Y zoom based on plotted (valid) months only.
-    plotted_vals = shares.values[valid_mask]
+    plotted_vals = shares_sm[keys].values[valid_mask]
     if plotted_vals.size:
         vmin = float(np.nanmin(plotted_vals))
         vmax = float(np.nanmax(plotted_vals))
     else:
         vmin, vmax = 0.0, 1.0
     span = max(1e-6, vmax - vmin)
-    pad = max(2.0, 0.10 * span)
-    ax.set_ylim(max(-0.5, vmin - pad), min(100.0, vmax + pad))
-    ax.set_ylabel("Share of updates within month (%)", fontsize=fs_axis, color="#374151", labelpad=10)
+    pad = max(2.0, 0.12 * span)
+    y_lo = max(-0.5, vmin - pad)
+    y_hi = min(100.0, vmax + pad)
 
-    ax.set_axisbelow(True)
-    ax.grid(axis="y", color="#e8ecf2", linestyle="-", linewidth=1.0, zorder=0)
-    ax.grid(axis="x", color="#f1f5f9", linestyle="-", linewidth=0.8, zorder=0)
-    ax.tick_params(axis="both", colors="#4b5563", labelsize=fs_axis, length=4, width=0.9)
-    for side in ("top", "right"):
-        ax.spines[side].set_visible(False)
-    ax.spines["left"].set_color("#aeb9c9")
-    ax.spines["bottom"].set_color("#aeb9c9")
-    ax.spines["left"].set_linewidth(1.15)
-    ax.spines["bottom"].set_linewidth(1.15)
+    # X ticks: quarterly labels for readability.
+    tick_idx = [i for i, m in enumerate(months) if m.endswith(("-01", "-04", "-07", "-10"))]
+    if not tick_idx:
+        tick_idx = list(range(0, len(months), 3))
+    tick_lbl = [_compact_month_tick_label(months[i]) for i in tick_idx]
 
-    # Reference (policy / event) markers — anchored to month index.
+    # Policy / event markers (reference only; helps interpret visible shifts).
     month_to_idx = {m: i for i, m in enumerate(months)}
-    ymin_lim, ymax_lim = ax.get_ylim()
-    label_y = ymax_lim - (ymax_lim - ymin_lim) * 0.04
     refs = [
-        ("2025-09", "iOS Release"),
-        ("2025-11", "Holiday Season"),
-        ("2026-01", "TikTok Deadline"),
+        ("2025-09", "Policy / iOS release"),
+        ("2025-11", "Holiday season"),
+        ("2026-01", "TikTok deadline"),
     ]
-    for ym, lbl in refs:
-        if ym not in month_to_idx:
-            continue
-        x_ref = month_to_idx[ym]
-        ax.axvline(x_ref, color="#c0392b", linestyle="--", linewidth=1.1, alpha=0.5, zorder=1)
-        ax.text(
-            x_ref + 0.08,
-            label_y,
-            lbl,
-            rotation=90,
-            ha="left",
-            va="top",
-            fontsize=7,
-            color="#c0392b",
-            alpha=0.9,
+    shade_windows = [
+        ("2026-01", "2026-04", "Jan–Apr 2026 window"),
+    ]
+
+    for ax_i, (k, color) in enumerate(zip(keys, palette)):
+        ax = axes_arr[ax_i]
+        ax.set_facecolor("#ffffff")
+        ys_full = shares_sm[k].astype(float).values
+        ys_masked = np.where(valid_mask, ys_full, np.nan)
+        ax.plot(
+            masked_xs,
+            ys_masked,
+            marker="o" if k == BUGFIX_KEY else None,
+            markersize=3.4 if k == BUGFIX_KEY else 0,
+            linewidth=2.0 if k == BUGFIX_KEY else 1.4,
+            color=color,
+            solid_capstyle="round",
+            zorder=3,
         )
+        ax.set_title(_legend_label(k), fontsize=10, fontweight="600", color="#111827", pad=6)
+        ax.set_ylim(y_lo, y_hi)
+        ax.set_xlim(-0.5, len(months) - 0.5)
+        ax.grid(axis="y", color="#eef2f7", linestyle="-", linewidth=0.9, zorder=0)
+        ax.grid(axis="x", color="#f6f8fb", linestyle="-", linewidth=0.7, zorder=0)
+        for ym, _lbl in refs:
+            if ym in month_to_idx:
+                ax.axvline(
+                    month_to_idx[ym],
+                    color="#c0392b",
+                    linestyle="--",
+                    linewidth=1.0,
+                    alpha=0.35,
+                    zorder=1,
+                )
+        for a_ym, b_ym, _lbl in shade_windows:
+            if a_ym in month_to_idx and b_ym in month_to_idx:
+                a = month_to_idx[a_ym] - 0.5
+                b = month_to_idx[b_ym] + 0.5
+                ax.axvspan(a, b, color="#fff7ed", alpha=0.35, zorder=0)
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+        ax.spines["left"].set_color("#c7d0df")
+        ax.spines["bottom"].set_color("#c7d0df")
+        ax.tick_params(axis="both", colors="#4b5563", labelsize=fs_axis - 1, length=3, width=0.8)
 
-    # Annotation for Jan-Apr 2026 bug-fix dominance peak.
-    if BUGFIX_KEY in shares.columns:
-        bugfix_series = shares[BUGFIX_KEY].astype(float)
-        peak_window = [m for m in ("2026-01", "2026-02", "2026-03", "2026-04") if m in month_to_idx]
-        if peak_window:
-            peak_vals = bugfix_series.loc[peak_window]
-            peak_month = str(peak_vals.idxmax())
-            peak_x = month_to_idx[peak_month]
-            peak_y = float(peak_vals.max())
-            ax.annotate(
-                "Bug fixes dominate\n(60-65%)",
-                xy=(peak_x, peak_y),
-                xytext=(peak_x - 6.0, min(95.0, peak_y + 12.0)),
-                fontsize=10,
-                fontweight="bold",
-                color="#0d3b66",
-                ha="center",
-                va="bottom",
-                bbox=dict(boxstyle="round", facecolor="yellow", alpha=0.8),
-                arrowprops=dict(arrowstyle="->", color="#0d3b66", lw=1.1, alpha=0.85),
-                zorder=6,
-            )
+    # Hide unused axes.
+    for j in range(nkeys, len(axes_arr)):
+        axes_arr[j].axis("off")
 
-    # Legend outside plot area so it doesn't shrink the axes.
-    ax.legend(
-        title=f"Top {len(keys)} categories",
-        loc="upper left",
-        bbox_to_anchor=(1.02, 1.0),
-        borderaxespad=0.0,
-        fontsize=fs_leg,
-        title_fontsize=fs_leg,
-        frameon=True,
-        fancybox=True,
-        framealpha=1.0,
-        edgecolor="#cdd6e4",
-        facecolor="#ffffff",
-    )
+    # Only label x ticks on bottom row.
+    for ax in axes_arr[max(0, nkeys - ncols) : nkeys]:
+        ax.set_xticks(tick_idx)
+        ax.set_xticklabels(tick_lbl, rotation=0, ha="center", fontsize=fs_axis - 1, color="#374151")
 
     fig.text(
         0.10,
         0.97,
-        "Category share over time (monthly) — Jan 2025 to May 2026",
+        "Category share over time (monthly; 3‑month moving average) — Jan 2025 to May 2026",
         fontsize=14,
         fontweight="600",
         color="#1f2937",
@@ -558,8 +534,9 @@ def _chart_category_evolution_quartile_buckets(version_df: pd.DataFrame) -> io.B
     )
     fig.text(
         0.10,
-        0.905,
-        "Each line is within-month share among dated observations; bug-fix line emphasized as the key finding.",
+        0.915,
+        "Small multiples: each panel is one update_category; excludes months with <5 observations. "
+        "Dashed lines / shading are reference-only event windows.",
         fontsize=11,
         color="#5c6575",
         va="top",
@@ -567,15 +544,25 @@ def _chart_category_evolution_quartile_buckets(version_df: pd.DataFrame) -> io.B
     )
     fig.text(
         0.10,
+        0.885,
+        "Date markers: 2025-09 ≈ policy/iOS-release window; 2025-11 ≈ holiday season; 2026-01 ≈ TikTok deadline. "
+        "Shading highlights Jan–Apr 2026.",
+        fontsize=10,
+        color="#5c6575",
+        va="top",
+        ha="left",
+    )
+    fig.text(
+        0.10,
         0.03,
-        "Months with <5 observations excluded; policy markers for reference only.",
+        "Interpret platform differences cautiously (Android dated coverage is thinner).",
         fontsize=9,
         color="#6b7280",
         va="bottom",
         ha="left",
     )
 
-    fig.subplots_adjust(left=0.10, right=0.74, top=0.83, bottom=0.18)
+    fig.subplots_adjust(left=0.07, right=0.985, top=0.86, bottom=0.10, wspace=0.22, hspace=0.45)
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor="#ffffff", edgecolor="none", pad_inches=0.18)
     plt.close(fig)
@@ -810,7 +797,7 @@ def append_visualization_sheet(xlsx_path: Path, version_df: pd.DataFrame) -> Non
         matplotlib.use("Agg")
         from openpyxl.drawing.image import Image as XLImage
         from openpyxl import load_workbook
-        from openpyxl.styles import Alignment, Font
+        from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     except ImportError as e:
         raise ImportError(
             "visualization_summary requires matplotlib and openpyxl. Install: pip install matplotlib openpyxl"
@@ -822,15 +809,34 @@ def append_visualization_sheet(xlsx_path: Path, version_df: pd.DataFrame) -> Non
         wb.remove(wb[_SHEET])
     ws = wb.create_sheet(_SHEET)
 
-    # Readability defaults (Excel renders images/text better with predictable widths).
-    ws.column_dimensions["A"].width = 44.0
-    for col in "BCDEFGHIJ":
-        ws.column_dimensions[col].width = 14.0
+    # Dashboard-like grid: left card (A–E), spacer (F), right card (G–J).
+    for col in "ABCDE":
+        ws.column_dimensions[col].width = 12.5
+    ws.column_dimensions["A"].width = 14.0
+    ws.column_dimensions["F"].width = 3.0
+    for col in "GHIJ":
+        ws.column_dimensions[col].width = 12.5
+    ws.column_dimensions["G"].width = 14.0
     ws.freeze_panes = None
 
+    fill_hdr = PatternFill(fill_type="solid", start_color="111827", end_color="111827")
+    fill_subhdr = PatternFill(fill_type="solid", start_color="EEF2FF", end_color="EEF2FF")
+    fill_card = PatternFill(fill_type="solid", start_color="FFFFFF", end_color="FFFFFF")
+    fill_canvas = PatternFill(fill_type="solid", start_color="F8FAFC", end_color="F8FAFC")
+    edge = Side(style="thin", color="D0D7E2")
+    border_card = Border(top=edge, bottom=edge, left=edge, right=edge)
+
+    for r in range(1, 220):
+        for c in range(1, 11):
+            ws.cell(r, c).fill = fill_canvas
+
     ws["A1"] = "Visualization (Quick Scans)"
-    ws["A1"].font = Font(bold=True, size=18)
+    ws["A1"].font = Font(bold=True, size=24)
+    ws["A1"].fill = fill_hdr
+    ws["A1"].font = Font(bold=True, size=24, color="FFFFFF")
+    ws["A1"].alignment = Alignment(vertical="center")
     ws.merge_cells("A1:J1")
+    ws.row_dimensions[1].height = 36
 
     n = len(version_df)
     ios_n = len(version_df[version_df["platform"] == "iOS"])
@@ -845,19 +851,37 @@ def append_visualization_sheet(xlsx_path: Path, version_df: pd.DataFrame) -> Non
     ws.row_dimensions[3].height = 40
 
     ws["A5"] = "Automated trend synopsis (quick read)"
-    ws["A5"].font = Font(bold=True, size=11)
+    ws["A5"].font = Font(bold=True, size=11, color="1F2937")
+    ws["A5"].fill = fill_subhdr
+    ws.merge_cells("A5:J5")
     bullets = build_automated_trend_synopsis(version_df)
-    synopsis = "\n".join(("• " + b.lstrip("• ").strip()) for b in bullets if str(b).strip())
-    ws["A6"] = synopsis
+    syn_parts: list[str] = []
+    for b in bullets:
+        raw = str(b).strip()
+        if not raw:
+            continue
+        one_line = re.sub(r"\s+", " ", raw.replace("\n", " ").strip())
+        syn_parts.append(one_line.lstrip("•").strip())
+
+    # Combined synopsis: one merged wrapped row (A6:J6).
+    synopsis = " ".join("• " + p for p in syn_parts if p).strip()
+    ws["A6"] = synopsis if synopsis else "(No synopsis — insufficient dated rows.)"
+    ws["A6"].font = Font(size=11)
     ws["A6"].alignment = Alignment(wrap_text=True, vertical="top")
-    ws.merge_cells("A6:J13")
-    ws.row_dimensions[6].height = 150
+    ws.merge_cells("A6:J6")
+    ws.row_dimensions[6].height = 288
+    synopsis_bot_row = 6
+    for c in range(1, 11):
+        ws.cell(6, c).fill = fill_card
+        ws.cell(6, c).border = border_card
 
     app_order = sorted(version_df["app_name"].fillna("").astype(str).unique().tolist())
     app_order = [a for a in app_order if a]
 
-    row_anchor = 15
-    images: list[tuple[str, Path | None]] = []
+    row_anchor = 8
+    # Dashboard layout:
+    # Row 8: two heatmap cards side-by-side (A–E) and (G–J)
+    # Then full-width cards below.
 
     heatmap_since = pd.Timestamp("2020-01-01")
     ds = dated_subset(version_df)
@@ -903,7 +927,7 @@ def append_visualization_sheet(xlsx_path: Path, version_df: pd.DataFrame) -> Non
             bin_period="M",
             title="Cadence heatmap (monthly) — iOS",
             subtitle=(
-                "iOS | monthly since 2020 (last 30 months) | per-bin counts | shared color scale (cap 20)"
+                "iOS | monthly since 2020 (last 30 bins) | per-bin counts | shared palette | shared count cap 20"
             ),
             vmax=shared_vmax,
             prepared=ios_p,
@@ -915,7 +939,6 @@ def append_visualization_sheet(xlsx_path: Path, version_df: pd.DataFrame) -> Non
         else None
     )
     ios_png = _save_png_bytes(ios_buf, charts_dir / "heatmap_ios.png") if ios_buf else None
-    images.append(("1A. iOS cadence heatmap", ios_png))
 
     and_buf = (
         _chart_update_frequency_heatmap_platform(
@@ -926,7 +949,7 @@ def append_visualization_sheet(xlsx_path: Path, version_df: pd.DataFrame) -> Non
             bin_period="M",
             title="Cadence heatmap (monthly) — Android",
             subtitle=(
-                "Android | monthly since 2020 (last 30 months) | per-bin counts | shared color scale (cap 20)"
+                "Android | monthly since 2020 (last 30 bins) | per-bin counts | shared palette | shared count cap 20"
             ),
             vmax=shared_vmax,
             prepared=and_p,
@@ -938,35 +961,80 @@ def append_visualization_sheet(xlsx_path: Path, version_df: pd.DataFrame) -> Non
         else None
     )
     and_png = _save_png_bytes(and_buf, charts_dir / "heatmap_android.png") if and_buf else None
-    images.append(("1B. Android cadence heatmap", and_png))
+    # --- Heatmap cards (row_anchor) ---
+    card_h_title = row_anchor
+    card_h_img = row_anchor + 1
+
+    def _card_title(cell_addr: str, title: str) -> None:
+        ws[cell_addr] = title
+        ws[cell_addr].font = Font(bold=True, size=11, color="111827")
+        ws[cell_addr].fill = fill_card
+        ws[cell_addr].alignment = Alignment(vertical="center")
+
+    # Left: iOS (A–E)
+    ws.merge_cells(start_row=card_h_title, start_column=1, end_row=card_h_title, end_column=5)
+    _card_title(f"A{card_h_title}", "iOS cadence heatmap")
+    for c in range(1, 6):
+        ws.cell(card_h_title, c).border = border_card
+        ws.cell(card_h_img, c).border = border_card
+        ws.cell(card_h_img, c).fill = fill_card
+
+    if ios_png and ios_png.is_file():
+        img = XLImage(str(ios_png))
+        img.width = 470
+        img.height = 300
+        ws.add_image(img, f"A{card_h_img}")
+    else:
+        ws["A9"] = "(Not enough data — see synopsis.)"
+
+    # Right: Android (G–J) (start at column 7)
+    ws.merge_cells(start_row=card_h_title, start_column=7, end_row=card_h_title, end_column=10)
+    _card_title(f"G{card_h_title}", "Android cadence heatmap")
+    for c in range(7, 11):
+        ws.cell(card_h_title, c).border = border_card
+        ws.cell(card_h_img, c).border = border_card
+        ws.cell(card_h_img, c).fill = fill_card
+
+    if and_png and and_png.is_file():
+        img = XLImage(str(and_png))
+        img.width = 470
+        img.height = 300
+        ws.add_image(img, f"G{card_h_img}")
+    else:
+        ws["G9"] = "(Not enough data — see synopsis.)"
+
+    # Advance below the two-row heatmap card block (plus a spacer).
+    row_anchor = card_h_img + 18
+
+    # --- Full-width cards ---
+    def _add_fullwidth_card(title: str, png_path: Path | None) -> None:
+        nonlocal row_anchor
+        title_row = row_anchor
+        img_row = row_anchor + 1
+        ws.merge_cells(start_row=title_row, start_column=1, end_row=title_row, end_column=10)
+        _card_title(f"A{title_row}", title)
+        for c in range(1, 11):
+            ws.cell(title_row, c).border = border_card
+            ws.cell(img_row, c).border = border_card
+            ws.cell(img_row, c).fill = fill_card
+        if png_path and png_path.is_file():
+            img = XLImage(str(png_path))
+            img.width = 950
+            img.height = 330
+            ws.add_image(img, f"A{img_row}")
+            row_anchor = img_row + 18
+        else:
+            ws["A" + str(img_row)] = "(Not enough data — see synopsis.)"
+            row_anchor = img_row + 3
 
     depth_buf = _chart_observation_depth_by_app_platform(version_df)
     depth_png = _save_png_bytes(depth_buf, charts_dir / "depth_by_app_platform.png") if depth_buf else None
-    images.append(("iOS vs Android observation depth (dated span) by app", depth_png))
+    _add_fullwidth_card("iOS vs Android observation depth (dated span) by app", depth_png)
 
     cat_buf = _chart_category_evolution_quartile_buckets(version_df)
     cat_png = _save_png_bytes(cat_buf, charts_dir / "category_evolution_quartiles.png") if cat_buf else None
-    images.append(("Category share shift (oldest vs newest quartile; slope chart)", cat_png))
+    _add_fullwidth_card("Category share shift (oldest vs newest quartile; slope chart)", cat_png)
 
-    # Layout controls: keep chart blocks tight (≤ 2 blank rows; default to 1).
-    IMG_ROW_SPAN = 17  # Approximate row footprint for 640×330 images at default row heights.
-    GAP_ROWS = 1
-
-    for title, p in images:
-        ws.cell(row=row_anchor, column=1, value=title)
-        ws.cell(row=row_anchor, column=1).font = Font(bold=True, size=10)
-        img_row = row_anchor + 1
-        if p is None or not p.is_file():
-            ws.cell(row=img_row, column=1, value="(Not enough data for this chart — see synopsis.)")
-            row_anchor = img_row + 1 + GAP_ROWS
-            continue
-        img = XLImage(str(p))
-        img.width = 640
-        img.height = 330
-        ws.add_image(img, f"A{img_row}")
-        row_anchor = img_row + IMG_ROW_SPAN + GAP_ROWS
-
-    ws.column_dimensions["A"].width = 108
     wb.save(xlsx_path)
 
 

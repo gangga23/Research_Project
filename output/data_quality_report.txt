@@ -4,6 +4,15 @@ app_master_rows: 20
 app_version_history_rows: 1326
 ios_rows: 250
 android_rows: 1076
+rows_parseable_release_date_all_platforms: 421
+pct_all_rows_parseable_release_date: 31.7%
+ios_rows_parseable_release_date: 250
+pct_ios_rows_parseable_release_date: 100.0%
+android_rows_parseable_release_date: 171
+pct_android_rows_parseable_release_date: 15.9%
+android_apkmirror_cache_rows: 928
+android_apkmirror_cache_rows_parseable_release_date: 23
+pct_android_apkmirror_cache_rows_parseable_release_date: 2.5%
 pct_all_rows_app_store_web: 18.9%
 pct_android_play_store_snapshot_rows: 0.9%
 pct_android_wayback_snapshot_rows: 2.1%

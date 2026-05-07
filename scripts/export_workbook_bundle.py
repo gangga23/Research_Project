@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.util
 import math
+import re
 import sys
 from pathlib import Path
 
@@ -133,6 +134,7 @@ def validate_frames(master_df: pd.DataFrame, version_df: pd.DataFrame) -> None:
         "current_version_release_date",
         "notes",
     }
+    # Optional columns are allowed (e.g., notes_source_url).
     req_v = {
         "app_id",
         "app_name",
@@ -181,6 +183,7 @@ def _apply_normalized_workbook_openpyxl_formatting(xlsx_path: Path) -> None:
     FILL_HDR = PatternFill(fill_type="solid", start_color="DAEEF3", end_color="DAEEF3")
     FILL_WHITE = PatternFill(fill_type="solid", start_color="FFFFFF", end_color="FFFFFF")
     FILL_ALT = PatternFill(fill_type="solid", start_color="F2F2F2", end_color="F2F2F2")
+    FILL_REPO_HIGHLIGHT = PatternFill(fill_type="solid", start_color="FFFACD", end_color="FFFACD")
     AL_WRAP_TOP = Alignment(horizontal="left", vertical="top", wrap_text=True)
     AL_NOWRAP_TOP = Alignment(horizontal="left", vertical="top", wrap_text=False)
 
@@ -214,11 +217,12 @@ def _apply_normalized_workbook_openpyxl_formatting(xlsx_path: Path) -> None:
         if val is None:
             return 15.0
         s = str(val)
-        chars_per_line = max(int(col_width * 0.85), 24)
+        # Conservative wrap estimate so wrapped narrative rows are not clipped in Excel.
+        chars_per_line = max(int(col_width * 0.76), 22)
         lines = 1
         for para in s.splitlines():
             lines += max(1, math.ceil(len(para) / chars_per_line))
-        return float(min(400.0, max(15.0, 12.0 + lines * 13.5)))
+        return float(min(409.0, max(15.0, 12.0 + lines * 14.5)))
 
     wb = load_workbook(xlsx_path)
 
@@ -351,19 +355,32 @@ def _apply_normalized_workbook_openpyxl_formatting(xlsx_path: Path) -> None:
     if "submission_summary" in wb.sheetnames:
         ws = wb["submission_summary"]
         ws.sheet_view.showGridLines = False
-        ws.column_dimensions["A"].width = 28.0
-        ws.column_dimensions["B"].width = 85.0
+        _w_a = 28.0
+        _w_b = 92.0
+        ws.column_dimensions["A"].width = _w_a
+        ws.column_dimensions["B"].width = _w_b
+        FONT_REPO = Font(name="Calibri", size=12, bold=True, color="0563C1", underline="single")
         for r in range(1, ws.max_row + 1):
             ha = ws.cell(r, 1)
             hb = ws.cell(r, 2)
             ha.font = FONT_BOLD
             ha.fill = FILL_HDR
-            ha.alignment = AL_NOWRAP_TOP
-            hb.font = FONT
-            hb.alignment = AL_WRAP_TOP
+            ha.alignment = AL_WRAP_TOP
+            sec = ha.value
+            if sec == "GitHub repository":
+                hb.font = FONT_REPO
+                hb.fill = FILL_REPO_HIGHLIGHT
+                hb.alignment = AL_WRAP_TOP
+                url = str(hb.value or "").strip()
+                if url.startswith(("http://", "https://")):
+                    hb.hyperlink = url
+                    hb.value = url
+            else:
+                hb.font = FONT
+                hb.alignment = AL_WRAP_TOP
             ws.row_dimensions[r].height = max(
-                _submission_summary_row_height(hb.value, col_width=85.0),
-                _submission_summary_row_height(ha.value, col_width=28.0),
+                _submission_summary_row_height(hb.value, col_width=_w_b),
+                _submission_summary_row_height(ha.value, col_width=_w_a),
             )
 
     # --- viz_fast_scan (visualizations) ---
@@ -373,7 +390,10 @@ def _apply_normalized_workbook_openpyxl_formatting(xlsx_path: Path) -> None:
         for row in ws.iter_rows():
             for cell in row:
                 cell.font = FONT
-                if isinstance(cell.value, str) and "\n" in cell.value:
+                # Synopsis bullets are single-line per row but must wrap; titles stay compact rows 1–2.
+                if cell.row <= 2:
+                    cell.alignment = AL_NOWRAP_TOP
+                elif isinstance(cell.value, str) and str(cell.value).strip():
                     cell.alignment = AL_WRAP_TOP
                 else:
                     cell.alignment = AL_NOWRAP_TOP
@@ -415,6 +435,9 @@ def export_workbook_bundle(
         version_df["history_source_url"] = (
             version_df["history_source_url"].fillna("").astype(str).map(lambda x: x.strip())
         )
+    # Analysis-friendly boolean flags (avoid string-sentinel filters downstream).
+    rn = version_df.get("release_notes", pd.Series([""] * len(version_df))).fillna("").astype(str).str.strip()
+    version_df["has_release_notes"] = rn.ne("") & rn.ne("Not available")
     try:
         from apkmirror_history_merge import merge_apkmirror_history_urls
 
@@ -488,9 +511,12 @@ def export_workbook_bundle(
     reading_note = (
         "Reading note:\n"
         "Lower AI-related share can reflect template dilution as bug-fix framing rises, not necessarily less AI work.\n\n"
-        "Cadence / quartile / depth charts need parseable release_date: blank APKMirror CSV dates are filled from "
-        "each APKMirror page Uploaded stamp when fetched (cached in data/cache/apkmirror_upload_dates.json; "
-        "optional APKMIRROR_UPLOAD_FETCH_MAX)."
+        "Cadence / quartile / depth charts use parseable release_date. Prefer filling Android APKMirror dates via "
+        "refreshed listing CSVs (scripts/apkmirror_scraper.py --scrape, then pipeline ingest); optional detail-page "
+        "fills use scripts/backfill_apkmirror_dates_only.py with caches under data/cache/apkmirror_upload_dates.json "
+        "and data/cache/apkmirror_upload_failures.json — bulk automated detail fetches often hit HTTP 403. For "
+        "reproducible workbook rebuilds without network, set APKMIRROR_UPLOAD_FETCH_MAX=0 when running "
+        "scripts/build_workbook_only.py."
     )
     if not submission_df.empty and {"Section", "Details"}.issubset(set(submission_df.columns)):
         mask = submission_df["Section"].astype(str).eq("Challenges and limitations")

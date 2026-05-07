@@ -2,7 +2,7 @@
 Re-apply Excel formatting to an existing workbook without re-running the data pipeline.
 
 Uses openpyxl inside ``submission_summary.apply_submission_sheet_style`` to load
-``output/normalized_dataset.xlsx``, style ``COVER`` + ``submission_summary``, and save.
+``output/normalized_dataset.xlsx``, style ``submission_summary``, and save.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ def main() -> int:
         return 1
 
     ss = _load_submission_summary()
-    ss.apply_submission_sheet_style(OUTPUT_XLSX, ("COVER", "submission_summary"))
+    ss.apply_submission_sheet_style(OUTPUT_XLSX, ("submission_summary",))
     print(f"Updated formatting: {OUTPUT_XLSX}")
     return 0
 

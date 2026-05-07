@@ -2,8 +2,8 @@
 Rebuild Excel + derived CSV/text outputs from cached ``app_master.csv`` and
 ``app_version_history.csv`` — **no** Play / Apple / Wayback scraping.
 
-Use after a full ``run_pipeline.py`` run when you only changed summary logic,
-COVER copy, or formatting — finishes in seconds.
+Use after a full ``run_pipeline.py`` run when you only changed summary logic
+or formatting — finishes in seconds.
 
 Requires: ``output/app_master.csv`` and ``output/app_version_history.csv``.
 """

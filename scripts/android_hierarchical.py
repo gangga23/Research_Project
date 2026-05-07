@@ -7,7 +7,7 @@ RSS/Atom (`android_changelog_feed_url`): auto-classified feeds; only
 `developer_changelog`; others become `feature_signal`.
 
 If ``data/cache/apkmirror_{app_id}.csv`` exists with usable rows (version + APKMirror
-/apk/ URL), those rows are ingested as ``apkmirror_cache`` (medium) and count as
+/apk/ URL), those rows are ingested as ``apkmirror_cache`` (low) and count as
 structured coverage — skipping the review inferred fallback.
 Blank CSV ``release_date`` cells trigger a one-time APKMirror release-page fetch for an
 ``Uploaded`` timestamp (cached in ``data/cache/apkmirror_upload_dates.json``) so dated
@@ -442,7 +442,7 @@ def load_apkmirror_cache_rows(
                         "release_date": rdate,
                         "release_notes": "Not available",
                         "source_type": "apkmirror_cache",
-                        "confidence_level": "medium",
+                        "confidence_level": "low",
                         "update_category": ucat,
                         "history_source_url": url,
                     }
