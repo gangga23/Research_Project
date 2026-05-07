@@ -28,7 +28,7 @@ from timeseries_insights_core import (
     parse_release_dates,
 )
 
-_SHEET = "viz_fast_scan"
+_SHEET = "charts"
 
 # Cadence heatmaps (iOS/Android): cap color normalization so 0–20 uses full colormap;
 # counts above the cap share the top color (colorbar ``extend='max'``).
@@ -790,256 +790,350 @@ def build_explanatory_questions(version_df: pd.DataFrame) -> list[str]:
 
 
 def append_visualization_sheet(xlsx_path: Path, version_df: pd.DataFrame) -> None:
-    """Insert / replace ``viz_fast_scan`` worksheet."""
+    """Insert / replace ``charts`` worksheet. All visuals are Matplotlib-generated PNGs embedded as images."""
     try:
         import matplotlib
 
-        matplotlib.use("Agg")
-        from openpyxl.drawing.image import Image as XLImage
+        matplotlib.use("Agg")  # non-interactive backend, no display needed
+        import matplotlib.pyplot as plt
+
         from openpyxl import load_workbook
-        from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+        from openpyxl.drawing.image import Image as XLImage
+        from openpyxl.styles import Alignment, Font
     except ImportError as e:
         raise ImportError(
-            "visualization_summary requires matplotlib and openpyxl. Install: pip install matplotlib openpyxl"
+            "visualization_summary requires matplotlib and openpyxl. "
+            "Install: pip install matplotlib openpyxl"
         ) from e
 
-    charts_dir = xlsx_path.parent / "charts"
+    CHART_DIR = Path(__file__).parents[1] / "data" / "cache" / "charts"
+    CHART_DIR.mkdir(parents=True, exist_ok=True)
+
+    def save_chart_png(fig, name: str, *, pad_inches: float = 0.06) -> Path:
+        path = CHART_DIR / f"{name}.png"
+        fig.savefig(
+            path,
+            dpi=150,
+            bbox_inches="tight",
+            pad_inches=pad_inches,
+            facecolor="white",
+            edgecolor="none",
+        )
+        plt.close(fig)
+        return path
+
+    def embed_image(ws, path: Path, anchor: str, width_pt: float, height_pt: float) -> None:
+        img = XLImage(str(path))
+        img.width = width_pt * 0.75  # pt to px at 96dpi
+        img.height = height_pt * 0.75
+        img.anchor = anchor
+        ws.add_image(img)
+
+    # --- Prepare dated data ---
+    df = version_df.copy()
+    df["_dt"] = parse_release_dates(df)
+    dated_df_all = df[df["_dt"].notna()].copy()
+    dated_df_all["_dt"] = pd.to_datetime(dated_df_all["_dt"])
+    dated_df_all["month"] = dated_df_all["_dt"].dt.to_period("M").dt.to_timestamp()
+
+    # Many Android apps have dated rows primarily before 2024; depth must use full history.
+    # The 2024+ window is only for cadence/share charts to keep axes readable.
+    dated_df_recent = dated_df_all[dated_df_all["month"] >= pd.Timestamp("2024-01-01")].copy()
+
     wb = load_workbook(xlsx_path)
     if _SHEET in wb.sheetnames:
         wb.remove(wb[_SHEET])
     ws = wb.create_sheet(_SHEET)
 
-    # Dashboard-like grid: left card (A–E), spacer (F), right card (G–J).
-    for col in "ABCDE":
-        ws.column_dimensions[col].width = 12.5
-    ws.column_dimensions["A"].width = 14.0
-    ws.column_dimensions["F"].width = 3.0
-    for col in "GHIJ":
-        ws.column_dimensions[col].width = 12.5
-    ws.column_dimensions["G"].width = 14.0
-    ws.freeze_panes = None
+    # Basic readability for a wide canvas.
+    for col in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+        ws.column_dimensions[col].width = 4.2
 
-    fill_hdr = PatternFill(fill_type="solid", start_color="111827", end_color="111827")
-    fill_subhdr = PatternFill(fill_type="solid", start_color="EEF2FF", end_color="EEF2FF")
-    fill_card = PatternFill(fill_type="solid", start_color="FFFFFF", end_color="FFFFFF")
-    fill_canvas = PatternFill(fill_type="solid", start_color="F8FAFC", end_color="F8FAFC")
-    edge = Side(style="thin", color="D0D7E2")
-    border_card = Border(top=edge, bottom=edge, left=edge, right=edge)
+    # Header/context.
+    ws["A1"] = "Visualizations (Quick Scans)"
+    ws["A1"].font = Font(bold=True, size=16, color="111827")
+    ws.merge_cells("A1:N1")
 
-    for r in range(1, 220):
-        for c in range(1, 11):
-            ws.cell(r, c).fill = fill_canvas
+    # Summary card as a PNG (more reliable than Excel wrapping).
+    def _summary_card_png() -> Path:
+        import textwrap
 
-    ws["A1"] = "Visualization (Quick Scans)"
-    ws["A1"].font = Font(bold=True, size=24)
-    ws["A1"].fill = fill_hdr
-    ws["A1"].font = Font(bold=True, size=24, color="FFFFFF")
-    ws["A1"].alignment = Alignment(vertical="center")
-    ws.merge_cells("A1:J1")
-    ws.row_dimensions[1].height = 36
+        n = len(version_df)
+        plat = version_df.get("platform", pd.Series([""] * n)).astype(str)
+        ios_obs = int((plat == "iOS").sum())
+        and_obs = int((plat == "Android").sum())
+        dt = parse_release_dates(version_df)
+        ios_dated = int(((plat == "iOS") & dt.notna()).sum())
+        and_dated = int(((plat == "Android") & dt.notna()).sum())
+        v = version_df.get("version_number", pd.Series([""] * n)).fillna("").astype(str).str.strip()
+        ios_vpct = float((v[plat == "iOS"].ne("")).mean() * 100.0) if ios_obs else 0.0
+        and_vpct = float((v[plat == "Android"].ne("")).mean() * 100.0) if and_obs else 0.0
+        st = version_df.get("source_type", pd.Series([""] * n)).fillna("").astype(str)
+        ios_top = st[plat == "iOS"].value_counts().head(2)
+        and_top = st[plat == "Android"].value_counts().head(2)
 
-    n = len(version_df)
-    ios_n = len(version_df[version_df["platform"] == "iOS"])
-    and_n = len(version_df[version_df["platform"] == "Android"])
-    dated_n = int(parse_release_dates(version_df).notna().sum())
-    ws["A3"] = (
-        "Same underlying rows as app_version_history / submission_observations\n"
-        f"({n} observations; {ios_n} iOS / {and_n} Android; {dated_n} dated)."
-    )
-    ws["A3"].alignment = Alignment(wrap_text=True, vertical="top")
-    ws.merge_cells("A3:J4")
-    ws.row_dimensions[3].height = 40
+        bullets = build_automated_trend_synopsis(version_df)
+        syn = " ".join(("• " + str(b).strip().lstrip("•").strip()) for b in bullets if str(b).strip()).strip()
+        syn = "\n".join(textwrap.wrap(syn, width=160)) if syn else "(No synopsis — insufficient dated rows.)"
 
-    ws["A5"] = "Automated trend synopsis (quick read)"
-    ws["A5"].font = Font(bold=True, size=11, color="1F2937")
-    ws["A5"].fill = fill_subhdr
-    ws.merge_cells("A5:J5")
-    bullets = build_automated_trend_synopsis(version_df)
-    syn_parts: list[str] = []
-    for b in bullets:
-        raw = str(b).strip()
-        if not raw:
-            continue
-        one_line = re.sub(r"\s+", " ", raw.replace("\n", " ").strip())
-        syn_parts.append(one_line.lstrip("•").strip())
+        def _shorten(s: str, n: int = 64) -> str:
+            s = (s or "").strip()
+            return s if len(s) <= n else (s[: n - 1].rstrip() + "…")
 
-    # Combined synopsis: one merged wrapped row (A6:J6).
-    synopsis = " ".join("• " + p for p in syn_parts if p).strip()
-    ws["A6"] = synopsis if synopsis else "(No synopsis — insufficient dated rows.)"
-    ws["A6"].font = Font(size=11)
-    ws["A6"].alignment = Alignment(wrap_text=True, vertical="top")
-    ws.merge_cells("A6:J6")
-    ws.row_dimensions[6].height = 288
-    synopsis_bot_row = 6
-    for c in range(1, 11):
-        ws.cell(6, c).fill = fill_card
-        ws.cell(6, c).border = border_card
-
-    app_order = sorted(version_df["app_name"].fillna("").astype(str).unique().tolist())
-    app_order = [a for a in app_order if a]
-
-    row_anchor = 8
-    # Dashboard layout:
-    # Row 8: two heatmap cards side-by-side (A–E) and (G–J)
-    # Then full-width cards below.
-
-    heatmap_since = pd.Timestamp("2020-01-01")
-    ds = dated_subset(version_df)
-    fill_end: pd.Timestamp | None = None
-    if ds is not None and len(ds) and "_dt" in ds.columns:
-        mx_dt = ds["_dt"].max()
-        if pd.notna(mx_dt):
-            fill_end = pd.Timestamp(mx_dt)
-
-    ios_p = _cadence_heatmap_prepare(
-        version_df,
-        platform="iOS",
-        app_order=app_order,
-        max_bins=30,
-        bin_period="M",
-        since=heatmap_since,
-        fill_period_bins_since=heatmap_since,
-        fill_end=fill_end,
-    )
-    and_p = _cadence_heatmap_prepare(
-        version_df,
-        platform="Android",
-        app_order=app_order,
-        max_bins=30,
-        bin_period="M",
-        since=heatmap_since,
-        fill_period_bins_since=heatmap_since,
-        fill_end=fill_end,
-    )
-    mx = 1.0
-    if ios_p is not None:
-        mx = max(mx, float(ios_p[0].max()))
-    if and_p is not None:
-        mx = max(mx, float(and_p[0].max()))
-    shared_vmax = min(CADENCE_HEATMAP_VMAX_CAP, max(1.0, float(math.ceil(mx))))
-
-    ios_buf = (
-        _chart_update_frequency_heatmap_platform(
-            version_df,
-            platform="iOS",
-            app_order=app_order,
-            max_bins=30,
-            bin_period="M",
-            title="Cadence heatmap (monthly) — iOS",
-            subtitle=(
-                "iOS | monthly since 2020 (last 30 bins) | per-bin counts | shared palette | shared count cap 20"
-            ),
-            vmax=shared_vmax,
-            prepared=ios_p,
-            since=heatmap_since,
-            fill_period_bins_since=heatmap_since,
-            fill_end=fill_end,
+        fig = plt.figure(figsize=(12.5, 4.2))
+        ax = fig.add_axes([0, 0, 1, 1])
+        ax.axis("off")
+        ax.text(0.01, 0.93, "Quick metrics + synopsis", fontsize=14, fontweight="bold", color="#111827")
+        ax.text(
+            0.01,
+            0.86,
+            f"Same underlying rows as version_history ({n} observations; {ios_obs} iOS / {and_obs} Android; "
+            f"{int(dt.notna().sum())} dated).",
+            fontsize=10,
+            color="#374151",
         )
-        if ios_p is not None
-        else None
-    )
-    ios_png = _save_png_bytes(ios_buf, charts_dir / "heatmap_ios.png") if ios_buf else None
 
-    and_buf = (
-        _chart_update_frequency_heatmap_platform(
-            version_df,
-            platform="Android",
-            app_order=app_order,
-            max_bins=30,
-            bin_period="M",
-            title="Cadence heatmap (monthly) — Android",
-            subtitle=(
-                "Android | monthly since 2020 (last 30 bins) | per-bin counts | shared palette | shared count cap 20"
-            ),
-            vmax=shared_vmax,
-            prepared=and_p,
-            since=heatmap_since,
-            fill_period_bins_since=heatmap_since,
-            fill_end=fill_end,
+        table_data = [
+            [
+                "iOS",
+                f"{ios_obs}",
+                f"{ios_dated}",
+                f"{ios_vpct:.0f}%",
+                _shorten(", ".join(f"{k} ({int(v)})" for k, v in ios_top.items()), 70),
+            ],
+            [
+                "Android",
+                f"{and_obs}",
+                f"{and_dated}",
+                f"{and_vpct:.0f}%",
+                _shorten(", ".join(f"{k} ({int(v)})" for k, v in and_top.items()), 70),
+            ],
+        ]
+        col_labels = ["Platform", "Observations", "Dated", "% w/ version", "Dominant source_type(s)"]
+        tbl = ax.table(
+            cellText=table_data,
+            colLabels=col_labels,
+            cellLoc="left",
+            colLoc="left",
+            bbox=[0.01, 0.54, 0.98, 0.26],
         )
-        if and_p is not None
-        else None
-    )
-    and_png = _save_png_bytes(and_buf, charts_dir / "heatmap_android.png") if and_buf else None
-    # --- Heatmap cards (row_anchor) ---
-    card_h_title = row_anchor
-    card_h_img = row_anchor + 1
+        tbl.auto_set_font_size(False)
+        tbl.set_fontsize(10)
+        # Reduce wasted whitespace + prevent overflow by enforcing column widths.
+        col_widths = [0.12, 0.12, 0.08, 0.12, 0.56]
+        for (r, c), cell in tbl.get_celld().items():
+            if c < len(col_widths):
+                cell.set_width(col_widths[c])
+            if r == 0:
+                cell.set_text_props(weight="bold", color="#111827")
+                cell.set_facecolor("#F3F4F6")
+            else:
+                cell.set_text_props(color="#374151")
+            cell.set_edgecolor("#E5E7EB")
 
-    def _card_title(cell_addr: str, title: str) -> None:
-        ws[cell_addr] = title
-        ws[cell_addr].font = Font(bold=True, size=11, color="111827")
-        ws[cell_addr].fill = fill_card
-        ws[cell_addr].alignment = Alignment(vertical="center")
+        ax.text(0.01, 0.49, "Automated trend synopsis (quick read):", fontsize=11, fontweight="bold", color="#111827")
+        ax.text(0.01, 0.45, syn, fontsize=10, color="#374151", va="top")
 
-    # Left: iOS (A–E)
-    ws.merge_cells(start_row=card_h_title, start_column=1, end_row=card_h_title, end_column=5)
-    _card_title(f"A{card_h_title}", "iOS cadence heatmap")
-    for c in range(1, 6):
-        ws.cell(card_h_title, c).border = border_card
-        ws.cell(card_h_img, c).border = border_card
-        ws.cell(card_h_img, c).fill = fill_card
+        return save_chart_png(fig, "summary_card", pad_inches=0.03)
 
-    if ios_png and ios_png.is_file():
-        img = XLImage(str(ios_png))
-        img.width = 470
-        img.height = 300
-        ws.add_image(img, f"A{card_h_img}")
-    else:
-        ws["A9"] = "(Not enough data — see synopsis.)"
+    p_sum = _summary_card_png()
+    embed_image(ws, p_sum, anchor="A2", width_pt=980, height_pt=260)
 
-    # Right: Android (G–J) (start at column 7)
-    ws.merge_cells(start_row=card_h_title, start_column=7, end_row=card_h_title, end_column=10)
-    _card_title(f"G{card_h_title}", "Android cadence heatmap")
-    for c in range(7, 11):
-        ws.cell(card_h_title, c).border = border_card
-        ws.cell(card_h_img, c).border = border_card
-        ws.cell(card_h_img, c).fill = fill_card
+    # Annotation card (Android coverage + marker legend) as PNG for stability.
+    def _annotation_card_png() -> Path:
+        # Compact figure + minimal padding to reduce white gaps in the saved PNG.
+        fig = plt.figure(figsize=(12.5, 2.0))
+        ax = fig.add_axes([0, 0, 1, 1])
+        ax.axis("off")
+        ax.text(0.01, 0.92, "Notes & reference markers", fontsize=12, fontweight="bold", color="#111827")
 
-    if and_png and and_png.is_file():
-        img = XLImage(str(and_png))
-        img.width = 470
-        img.height = 300
-        ws.add_image(img, f"G{card_h_img}")
-    else:
-        ws["G9"] = "(Not enough data — see synopsis.)"
+        ax.text(0.01, 0.74, "Android dated coverage:", fontsize=10, fontweight="bold", color="#111827")
+        ax.text(
+            0.23,
+            0.74,
+            "Cadence/share charts use only rows with parseable release_date. Many Android rows are listing/archive-derived\n"
+            "and lack dates, so gaps may reflect missing metadata—not fewer updates.",
+            fontsize=10,
+            color="#374151",
+            va="center",
+        )
 
-    # Advance below the two-row heatmap card block (plus a spacer).
-    row_anchor = card_h_img + 18
+        ax.text(0.01, 0.42, "Category small-multiples markers:", fontsize=10, fontweight="bold", color="#111827")
+        ax.text(
+            0.33,
+            0.42,
+            "Dashed lines are reference-only anchors: 2025-09 (iOS 18), 2025-11 (Holiday window), 2026-01 (TikTok).\n"
+            "Shaded window (2026-01 → 2026-04) highlights the early-2026 period in our dataset where several series shift;\n"
+            "use it as a visual guide for discussing potential policy/event alignment, not as causal proof.",
+            fontsize=10,
+            color="#374151",
+            va="center",
+        )
+        return save_chart_png(fig, "annotation_card", pad_inches=0.02)
 
-    # --- Full-width cards ---
-    def _add_fullwidth_card(title: str, png_path: Path | None) -> None:
-        nonlocal row_anchor
-        title_row = row_anchor
-        img_row = row_anchor + 1
-        ws.merge_cells(start_row=title_row, start_column=1, end_row=title_row, end_column=10)
-        _card_title(f"A{title_row}", title)
-        for c in range(1, 11):
-            ws.cell(title_row, c).border = border_card
-            ws.cell(img_row, c).border = border_card
-            ws.cell(img_row, c).fill = fill_card
-        if png_path and png_path.is_file():
-            img = XLImage(str(png_path))
-            img.width = 950
-            img.height = 330
-            ws.add_image(img, f"A{img_row}")
-            row_anchor = img_row + 18
-        else:
-            ws["A" + str(img_row)] = "(Not enough data — see synopsis.)"
-            row_anchor = img_row + 3
 
-    depth_buf = _chart_observation_depth_by_app_platform(version_df)
-    depth_png = _save_png_bytes(depth_buf, charts_dir / "depth_by_app_platform.png") if depth_buf else None
-    _add_fullwidth_card("iOS vs Android observation depth (dated span) by app", depth_png)
+    def _heatmap(ax, piv: pd.DataFrame, title: str) -> None:
+        mat = piv.to_numpy()
+        im = ax.imshow(mat, aspect="auto", cmap="YlOrRd", vmin=0, vmax=20)
+        ax.set_title(title, fontsize=10)
+        ax.set_xlabel("")
+        ax.set_ylabel("")
+        ax.set_yticks(range(len(piv.index)))
+        ax.set_yticklabels([str(x) for x in piv.index], fontsize=8)
+        ax.set_xticks(range(len(piv.columns)))
+        ax.set_xticklabels(
+            [pd.Timestamp(x).strftime("%b '%y") for x in piv.columns],
+            rotation=45,
+            ha="right",
+            fontsize=8,
+        )
+        # Compact colorbar.
+        cb = ax.figure.colorbar(im, ax=ax, fraction=0.05, pad=0.02)
+        cb.ax.tick_params(labelsize=8)
 
-    cat_buf = _chart_category_evolution_quartile_buckets(version_df)
-    cat_png = _save_png_bytes(cat_buf, charts_dir / "category_evolution_quartiles.png") if cat_buf else None
-    _add_fullwidth_card("Category share shift (oldest vs newest quartile; slope chart)", cat_png)
+    # CHART 1 — iOS cadence heatmap
+    ios = dated_df_recent[dated_df_recent["platform"].astype(str).eq("iOS")].copy()
+    if not ios.empty:
+        piv = (
+            ios.groupby(["app_name", "month"])
+            .size()
+            .unstack(fill_value=0)
+            .sort_index(axis=0)
+            .sort_index(axis=1)
+        )
+        fig, ax = plt.subplots(figsize=(6.0, 3.7))
+        _heatmap(ax, piv, "Cadence heatmap (monthly) — iOS")
+        p = save_chart_png(fig, "cadence_heatmap_ios")
+        embed_image(ws, p, anchor="A20", width_pt=470, height_pt=340)
+
+    # CHART 2 — Android cadence heatmap
+    andr = dated_df_recent[dated_df_recent["platform"].astype(str).eq("Android")].copy()
+    if not andr.empty:
+        piv = (
+            andr.groupby(["app_name", "month"])
+            .size()
+            .unstack(fill_value=0)
+            .sort_index(axis=0)
+            .sort_index(axis=1)
+        )
+        fig, ax = plt.subplots(figsize=(6.0, 3.7))
+        _heatmap(ax, piv, "Cadence heatmap (monthly) — Android")
+        p = save_chart_png(fig, "cadence_heatmap_android")
+        embed_image(ws, p, anchor="H20", width_pt=470, height_pt=340)
+
+    # (Moved into PNG annotation card below for layout stability.)
+
+    # CHART 3 — observation depth bar chart
+    if not dated_df_all.empty:
+        spans = (
+            dated_df_all.groupby(["app_name", "platform"])["_dt"]
+            .agg(["min", "max"])
+            .reset_index()
+        )
+        spans["span_days"] = (spans["max"] - spans["min"]).dt.days.astype(int)
+        ios_s = spans[spans["platform"] == "iOS"][["app_name", "span_days"]].rename(columns={"span_days": "ios"})
+        and_s = spans[spans["platform"] == "Android"][["app_name", "span_days"]].rename(columns={"span_days": "android"})
+        merged = pd.merge(ios_s, and_s, on="app_name", how="outer").fillna(0)
+        merged["android"] = merged["android"].astype(int)
+        merged["ios"] = merged["ios"].astype(int)
+        merged = merged.sort_values("android", ascending=False)
+
+        fig, ax = plt.subplots(figsize=(10.0, 3.1))
+        y = range(len(merged))
+        ax.barh([i + 0.18 for i in y], merged["ios"], height=0.35, color="#4472C4", label="iOS")
+        ax.barh([i - 0.18 for i in y], merged["android"], height=0.35, color="#ED7D31", label="Android")
+        ax.set_yticks(list(y))
+        ax.set_yticklabels(merged["app_name"].tolist(), fontsize=8)
+        ax.set_xlabel("Dated span in days", fontsize=8)
+        ax.set_title("iOS vs Android observation depth by app (dated span)", fontsize=10)
+        ax.axvline(365, color="#A3A3A3", linestyle="--", linewidth=0.8)
+        ax.text(365, len(merged) - 0.5, "1 year", color="#6B7280", fontsize=8, rotation=90, va="top", ha="right")
+        ax.legend(loc="lower right", fontsize=8, frameon=False)
+        fig.tight_layout()
+        p = save_chart_png(fig, "observation_depth_by_app")
+        embed_image(ws, p, anchor="A44", width_pt=980, height_pt=300)
+
+    # CHART 4-9 — category share small multiples (combined 3×2)
+    cats = [
+        "Bug fixes / performance improvements",
+        "Other",
+        "Payments / monetization",
+        "UI / design changes",
+        "AI-related features",
+        "Creator tools / content features",
+    ]
+    colors = {
+        "Bug fixes / performance improvements": "#1F3864",
+        "Other": "#ED7D31",
+        "Payments / monetization": "#375623",
+        "UI / design changes": "#C00000",
+        "AI-related features": "#7030A0",
+        "Creator tools / content features": "#833C00",
+    }
+
+    if not dated_df_recent.empty and "update_category" in dated_df_recent.columns:
+        tot = dated_df_recent.groupby("month").size().rename("total").reset_index()
+        fig, axes = plt.subplots(2, 3, figsize=(13.0, 6.2), sharex=True, sharey=True)
+        axes = axes.flatten()
+        for i, cat in enumerate(cats):
+            ax = axes[i]
+            sub = (
+                dated_df_recent[dated_df_recent["update_category"].astype(str).eq(cat)]
+                .groupby("month")
+                .size()
+                .rename("n")
+                .reset_index()
+            )
+            m = pd.merge(tot, sub, on="month", how="left").fillna({"n": 0})
+            m = m[m["total"] >= 5].copy()
+            if m.empty:
+                ax.set_title(cat, fontsize=10, fontweight="bold")
+                ax.set_ylim(0, 70)
+                ax.grid(True, axis="y", alpha=0.15)
+                continue
+            m["share"] = (m["n"] / m["total"]) * 100.0
+            m["share_ma3"] = m["share"].rolling(3, min_periods=1).mean()
+            ax.plot(m["month"], m["share_ma3"], color=colors.get(cat, "#111827"), linewidth=2.2)
+            for dt in [pd.Timestamp("2025-09-01"), pd.Timestamp("2025-11-01"), pd.Timestamp("2026-01-01")]:
+                ax.axvline(dt, color="#BFBFBF", linestyle="--", linewidth=0.9)
+            ax.axvspan(pd.Timestamp("2026-01-01"), pd.Timestamp("2026-04-01"), color="#ED7D31", alpha=0.08)
+            ax.set_title(cat, fontsize=10, fontweight="bold")
+            ax.set_ylim(0, 70)
+            ax.grid(True, axis="y", alpha=0.15)
+            ax.tick_params(axis="both", labelsize=9)
+            ticks = m["month"].tolist()[:: max(1, int(len(m) / 6))]
+            ax.set_xticks(ticks)
+            ax.set_xticklabels([pd.Timestamp(ts).strftime("%b '%y") for ts in ticks], rotation=45, ha="right")
+
+        fig.suptitle("Category share small multiples (monthly; 3-month MA)", fontsize=12, fontweight="bold")
+        fig.text(
+            0.5,
+            0.01,
+            "Excludes months with <5 observations. Dashed lines are reference-only event windows. "
+            "Interpret platform differences cautiously (Android dated coverage is thinner).",
+            ha="center",
+            fontsize=9,
+            color="#6B7280",
+            style="italic",
+        )
+        fig.tight_layout(rect=[0, 0.04, 1, 0.95])
+        p = save_chart_png(fig, "category_small_multiples_3x2")
+        p_note = _annotation_card_png()
+        embed_image(ws, p_note, anchor="A74", width_pt=980, height_pt=160)
+        embed_image(ws, p, anchor="A80", width_pt=980, height_pt=520)
 
     wb.save(xlsx_path)
+
+    # CLEANUP: remove temporary PNGs after embedding.
+    for p in CHART_DIR.glob("*.png"):
+        try:
+            p.unlink()
+        except OSError:
+            pass
 
 
 def try_append_visualization_sheet(xlsx_path: Path, version_df: pd.DataFrame) -> None:
     try:
         append_visualization_sheet(xlsx_path, version_df)
     except Exception as e:
-        print(f"[warn] viz_fast_scan sheet skipped: {e}", file=sys.stderr)
+        print(f"[warn] charts sheet skipped: {e}", file=sys.stderr)

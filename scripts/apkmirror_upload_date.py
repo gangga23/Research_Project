@@ -83,10 +83,73 @@ def _iso_from_raw(raw: str) -> str:
         return ""
 
 
-def parse_upload_date_from_apkmirror_html(html: str) -> str:
+def parse_upload_date_from_apkmirror_html(html: str, *, debug: bool = False) -> str:
     if _is_cloudflare_interstitial(html):
         return ""
     soup = BeautifulSoup(html, "html.parser")
+
+    def _scan_uploaded_near(hit) -> str:
+        """Given a BeautifulSoup text node containing 'Uploaded', scan nearby text for a date."""
+        try:
+            s_hit = str(hit).strip()
+        except Exception:
+            return ""
+        if not s_hit:
+            return ""
+        # (a) "Uploaded: May 6, 2026 at 5:28PM GMT+0000" in same node.
+        m_inline = _UPLOADED_RE.search(s_hit)
+        if m_inline:
+            iso = _iso_from_raw(m_inline.group(1).strip())
+            if iso:
+                return iso
+        # (b) Look at parent text (often contains both label + value).
+        parent = getattr(hit, "parent", None)
+        if parent is not None:
+            ptxt = parent.get_text(" ", strip=True)
+            m_parent = _UPLOADED_RE.search(ptxt)
+            if m_parent:
+                iso = _iso_from_raw(m_parent.group(1).strip())
+                if iso:
+                    return iso
+        # (c) Grab next text node(s) after the "Uploaded" token and parse that.
+        nxt = hit
+        for _ in range(8):
+            try:
+                nxt = nxt.find_next(string=True)  # type: ignore[attr-defined]
+            except Exception:
+                nxt = None
+            if nxt is None:
+                break
+            cand = str(nxt).strip()
+            if not cand or re.search(r"\buploaded\b", cand, re.I):
+                continue
+            iso = _iso_from_raw(cand)
+            if iso:
+                return iso
+        return ""
+
+    # --- Best-effort "this release" match (most precise) ---
+    # Release pages include the release title in H1; the "All Releases" list also repeats it as a link.
+    # We match that link and extract Uploaded from the same row container to avoid unrelated sections.
+    h1 = soup.select_one("h1")
+    release_title = h1.get_text(" ", strip=True) if h1 is not None else ""
+    if release_title:
+        title_hits = soup.find_all(string=re.compile(rf"^{re.escape(release_title)}$", re.I))
+        for th in title_hits[:25]:
+            parent = getattr(th, "parent", None)
+            if parent is None or getattr(parent, "name", "") != "a":
+                continue
+            row = parent.find_parent(class_="appRow")
+            container = row.parent if row is not None and getattr(row, "parent", None) is not None else row
+            if container is None:
+                continue
+            up = container.find(string=re.compile(r"\buploaded\b", re.I))
+            if up is not None:
+                iso = _scan_uploaded_near(up)
+                if iso:
+                    return iso
+
+    # --- Structured layouts (fast path) ---
     # Newer APKMirror layout uses infoSlide/meta blocks (infoSlide-name/value).
     for p in soup.select("p"):
         lab = p.select_one(".infoSlide-name")
@@ -108,9 +171,76 @@ def parse_upload_date_from_apkmirror_html(html: str) -> str:
         iso = _iso_from_raw(val.get_text(strip=True))
         if iso:
             return iso
-    m = _UPLOADED_RE.search(soup.get_text(" ", strip=True))
+
+    # Prefer the "Uploaded" that belongs to THIS release version (avoid unrelated "Apps related to…" blocks).
+    ver = ""
+    if release_title:
+        mver = re.search(r"(\d+\.\d+(?:\.\d+)*)", release_title)
+        if mver:
+            ver = mver.group(1)
+    if ver:
+        # APKMirror release pages usually include "Version:{ver}" in the "All Releases" block.
+        v_hits = soup.find_all(string=re.compile(rf"\bVersion\s*:\s*{re.escape(ver)}\b", re.I))
+        for vh in v_hits[:20]:
+            # Scan forward in document order from this version label until we hit:
+            # - an "Uploaded" field (use it), or
+            # - the next "Version:" label (stop; we're in another release block), or
+            # - a small step cap.
+            cur = vh
+            for _ in range(260):
+                try:
+                    cur = cur.find_next(string=True)  # type: ignore[attr-defined]
+                except Exception:
+                    cur = None
+                if cur is None:
+                    break
+                txt = str(cur).strip()
+                if not txt:
+                    continue
+                if re.search(r"\bVersion\s*:\s*\d", txt, re.I):
+                    break
+                if re.search(r"\buploaded\b", txt, re.I):
+                    iso = _scan_uploaded_near(cur)
+                    if iso:
+                        return iso
+
+    # Resilient fallback: look for any "Uploaded" label and grab the nearest date-like text.
+    # APKMirror has changed markup multiple times; the word still appears even when metaSlide blocks do not.
+    uploaded_hits = soup.find_all(string=re.compile(r"\buploaded\b", re.I))
+    for hit in uploaded_hits[:60]:
+        try:
+            iso = _scan_uploaded_near(hit)
+        except Exception:
+            continue
+        if iso:
+            return iso
+
+    # Last resort: regex against full page text.
+    full_txt = soup.get_text(" ", strip=True)
+    m = _UPLOADED_RE.search(full_txt)
     if m:
         return _iso_from_raw(m.group(1).strip())
+
+    if debug and uploaded_hits:
+        # Print context around every "Uploaded" match to help tune parser without guessing markup.
+        # (200 chars around each match, as requested).
+        raw_txt = soup.get_text(" ", strip=True)
+        low = raw_txt.lower()
+        needle = "uploaded"
+        idx = 0
+        seen = 0
+        while True:
+            j = low.find(needle, idx)
+            if j < 0:
+                break
+            a = max(0, j - 100)
+            b = min(len(raw_txt), j + 100)
+            snippet = raw_txt[a:b].replace("\n", " ")
+            print(f"[apkmirror_upload_date][debug] Uploaded context {seen+1}: …{snippet}…")
+            seen += 1
+            if seen >= 20:
+                break
+            idx = j + len(needle)
     return ""
 
 
@@ -209,7 +339,8 @@ def resolve_apk_upload_date_detailed(url: str, *, sleep_s: float = 0.22) -> tupl
         time.sleep(sleep_s)
         return "", "cloudflare"
 
-    iso = parse_upload_date_from_apkmirror_html(r.text)
+    debug = os.environ.get("APKMIRROR_UPLOAD_DEBUG", "").strip().lower() in ("1", "true", "yes", "y")
+    iso = parse_upload_date_from_apkmirror_html(r.text, debug=debug)
     if iso:
         store[u] = iso
         try:

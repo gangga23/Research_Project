@@ -38,7 +38,7 @@ def main() -> int:
         return 1
 
     ss = _load_submission_summary()
-    ss.apply_submission_sheet_style(OUTPUT_XLSX, ("submission_summary",))
+    ss.apply_submission_sheet_style(OUTPUT_XLSX, ("summary",))
     print(f"Updated formatting: {OUTPUT_XLSX}")
     return 0
 

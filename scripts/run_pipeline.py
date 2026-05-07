@@ -375,9 +375,19 @@ def build_master_android(cfg: dict, play: dict) -> dict:
         )
     if not init:
         miss = _ANDROID_MASTER_MISSING_RELEASED
-        if (cfg.get("app_key") or "").strip().lower() == "paypal":
-            miss += " (can be substituted from iOS data as inference)"
-        notes_parts.append(miss)
+        app_key = (cfg.get("app_key") or "").strip().lower()
+        if app_key == "paypal":
+            # PayPal Play listing often omits "released" in google-play-scraper output.
+            # Use corporate press-release date as a latest-by bound (not necessarily first launch),
+            # and cite the press release as the primary source for this bound.
+            init = "2010-10-26"
+            url = "https://newsroom.paypal-corp.com/2010-10-26-PayPal-TM-and-Developers-Push-Mobile-into-Mainstream"
+            notes_parts.append(
+                "initial_release_date set as latest-by bound (PayPal press release 2010-10-26); "
+                "Play Store 'released' unavailable via scraper"
+            )
+        else:
+            notes_parts.append(miss)
     return {
         "app_id": stable_app_id(cfg["app_name"], "Android"),
         "app_name": cfg["app_name"],

@@ -29,17 +29,17 @@
   },
   "amazon_shopping": {
     "status": "partial",
-    "updated_at": "2026-05-06T23:11:38.190637+00:00",
+    "updated_at": "2026-05-07T07:18:59.612901+00:00",
     "detail": "HTTP 404 on uploads page 6 — stopping with rows collected so far",
     "versions_count": 142,
     "pages_fetched": 5
   },
   "uber": {
     "status": "partial",
-    "updated_at": "2026-05-06T23:12:18.139868+00:00",
-    "detail": "HTTP 403 on uploads page 10",
-    "versions_count": 225,
-    "pages_fetched": 9
+    "updated_at": "2026-05-07T07:19:51.933549+00:00",
+    "detail": "HTTP 404 on uploads page 13 — stopping with rows collected so far",
+    "versions_count": 304,
+    "pages_fetched": 12
   },
   "doordash": {
     "status": "blocked",

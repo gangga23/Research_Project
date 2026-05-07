@@ -42,20 +42,39 @@ def main() -> int:
         master_df["notes"] = ""
     both_platforms = infer_both_platform_app_count(master_df)
 
-    rep = export_workbook_bundle(
-        master_df,
-        version_df,
-        n_config_apps=len(apps),
-        both_platforms=both_platforms,
-        feed_validations=[],
-        output_dir=OUTPUT_DIR,
-        repo_root=ROOT,
-        script_dir=SCRIPT_DIR,
-        rewrite_master_version_csv=False,
-        rewrite_feed_validation_report=False,
-    )
+    # Prefer the canonical filename; if Windows temporarily locks it, fall back to a new name.
+    out_name = "normalized_dataset.xlsx"
+    try:
+        rep = export_workbook_bundle(
+            master_df,
+            version_df,
+            n_config_apps=len(apps),
+            both_platforms=both_platforms,
+            feed_validations=[],
+            output_dir=OUTPUT_DIR,
+            repo_root=ROOT,
+            script_dir=SCRIPT_DIR,
+            rewrite_master_version_csv=False,
+            rewrite_feed_validation_report=False,
+            xlsx_name=out_name,
+        )
+    except PermissionError:
+        out_name = "normalized_dataset_rebuilt.xlsx"
+        rep = export_workbook_bundle(
+            master_df,
+            version_df,
+            n_config_apps=len(apps),
+            both_platforms=both_platforms,
+            feed_validations=[],
+            output_dir=OUTPUT_DIR,
+            repo_root=ROOT,
+            script_dir=SCRIPT_DIR,
+            rewrite_master_version_csv=False,
+            rewrite_feed_validation_report=False,
+            xlsx_name=out_name,
+        )
 
-    print(f"Rebuilt deliverables from CSV cache (no scrape): {OUTPUT_DIR / 'normalized_dataset.xlsx'}")
+    print(f"Rebuilt deliverables from CSV cache (no scrape): {OUTPUT_DIR / out_name}")
     print(rep)
     return 0
 

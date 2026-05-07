@@ -713,7 +713,7 @@ def apply_submission_sheet_style(path: Path, sheet_names: tuple[str, ...]) -> No
         if name not in wb.sheetnames:
             continue
         ws = wb[name]
-        if name == "submission_summary":
+        if name == "summary":
             w_a, w_b = 28.0, 92.0
             _lock_col_width(ws.column_dimensions["A"], w_a)
             _lock_col_width(ws.column_dimensions["B"], w_b)
@@ -740,7 +740,7 @@ def apply_submission_sheet_style(path: Path, sheet_names: tuple[str, ...]) -> No
                 url = str(hb.value or "").strip()
                 if url.startswith(("http://", "https://")):
                     hb.hyperlink = url
-        elif name == "submission_observations":
+        elif name == "version_history":
             ws.freeze_panes = "A2"
         elif name == "timeseries_metrics":
             _lock_col_width(ws.column_dimensions["A"], 52)

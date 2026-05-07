@@ -194,10 +194,10 @@ def _apply_normalized_workbook_openpyxl_formatting(xlsx_path: Path) -> None:
         return Color(rgb=s)
 
     TAB_COLORS = {
-        "submission_observations": _rgb_tab("4472C4"),
-        "app_master": _rgb_tab("70AD47"),
-        "submission_summary": _rgb_tab("ED7D31"),
-        "viz_fast_scan": _rgb_tab("7030A0"),
+        "version_history": _rgb_tab("4472C4"),
+        "app_index": _rgb_tab("70AD47"),
+        "summary": _rgb_tab("ED7D31"),
+        "charts": _rgb_tab("7030A0"),
     }
 
     def _max_line_len(val: object) -> int:
@@ -226,9 +226,9 @@ def _apply_normalized_workbook_openpyxl_formatting(xlsx_path: Path) -> None:
 
     wb = load_workbook(xlsx_path)
 
-    # --- submission_observations ---
-    if "submission_observations" in wb.sheetnames:
-        ws = wb["submission_observations"]
+    # --- version_history ---
+    if "version_history" in wb.sheetnames:
+        ws = wb["version_history"]
         ws.freeze_panes = "A2"
         ws.sheet_view.showGridLines = True
         hdr_map: dict[str, int] = {}
@@ -271,23 +271,21 @@ def _apply_normalized_workbook_openpyxl_formatting(xlsx_path: Path) -> None:
 
         if ws.max_row >= 2:
             for r in range(2, ws.max_row + 1):
-                h = 45.0
+                # Keep rows compact; only grow when wrapped columns are actually long.
+                h = 18.0
                 if rn_ci is not None:
-                    h = max(
-                        h,
-                        _submission_summary_row_height(ws.cell(r, rn_ci).value, col_width=w_rn),
-                    )
+                    v = ws.cell(r, rn_ci).value
+                    if v and len(str(v)) >= 140:
+                        h = max(h, _submission_summary_row_height(v, col_width=w_rn))
                 if notes_ci is not None:
-                    h = max(
-                        h,
-                        _submission_summary_row_height(ws.cell(r, notes_ci).value, col_width=w_notes),
-                    )
+                    v = ws.cell(r, notes_ci).value
+                    if v and len(str(v)) >= 140:
+                        h = max(h, _submission_summary_row_height(v, col_width=w_notes))
                 if summ_ci is not None:
-                    h = max(
-                        h,
-                        _submission_summary_row_height(ws.cell(r, summ_ci).value, col_width=w_summ),
-                    )
-                ws.row_dimensions[r].height = min(float(h), 240.0)
+                    v = ws.cell(r, summ_ci).value
+                    if v and len(str(v)) >= 140:
+                        h = max(h, _submission_summary_row_height(v, col_width=w_summ))
+                ws.row_dimensions[r].height = min(float(h), 120.0)
 
         for url_ci in url_cols_ci:
             if url_ci is None:
@@ -306,9 +304,9 @@ def _apply_normalized_workbook_openpyxl_formatting(xlsx_path: Path) -> None:
         if ws.max_row >= 1:
             ws.auto_filter.ref = f"A1:{get_column_letter(ws.max_column)}{ws.max_row}"
 
-    # --- app_master ---
-    if "app_master" in wb.sheetnames:
-        ws = wb["app_master"]
+    # --- app_index ---
+    if "app_index" in wb.sheetnames:
+        ws = wb["app_index"]
         ws.freeze_panes = "A2"
         ws.sheet_view.showGridLines = True
         hdr_am: dict[str, int] = {}
@@ -351,9 +349,9 @@ def _apply_normalized_workbook_openpyxl_formatting(xlsx_path: Path) -> None:
         if ws.max_row >= 1:
             ws.auto_filter.ref = f"A1:{get_column_letter(ws.max_column)}{ws.max_row}"
 
-    # --- submission_summary ---
-    if "submission_summary" in wb.sheetnames:
-        ws = wb["submission_summary"]
+    # --- summary ---
+    if "summary" in wb.sheetnames:
+        ws = wb["summary"]
         ws.sheet_view.showGridLines = False
         _w_a = 28.0
         _w_b = 92.0
@@ -383,9 +381,9 @@ def _apply_normalized_workbook_openpyxl_formatting(xlsx_path: Path) -> None:
                 _submission_summary_row_height(ha.value, col_width=_w_a),
             )
 
-    # --- viz_fast_scan (visualizations) ---
-    if "viz_fast_scan" in wb.sheetnames:
-        ws = wb["viz_fast_scan"]
+    # --- charts ---
+    if "charts" in wb.sheetnames:
+        ws = wb["charts"]
         ws.sheet_view.showGridLines = False
         for row in ws.iter_rows():
             for cell in row:
@@ -417,6 +415,7 @@ def export_workbook_bundle(
     script_dir: Path,
     rewrite_master_version_csv: bool = True,
     rewrite_feed_validation_report: bool = True,
+    xlsx_name: str = "normalized_dataset.xlsx",
 ) -> str:
     """
     Write schema txt, CSVs (optional rewrite of master/version), reports, Excel, styling.
@@ -525,18 +524,18 @@ def export_workbook_bundle(
             prior = str(submission_df.at[i, "Details"] or "").strip()
             submission_df.at[i, "Details"] = (prior + "\n\n" + reading_note).strip() if prior else reading_note
 
-    xlsx = output_dir / "normalized_dataset.xlsx"
+    xlsx = output_dir / xlsx_name
     with pd.ExcelWriter(xlsx, engine="openpyxl") as wr:
-        submission_obs_df.to_excel(wr, sheet_name="submission_observations", index=False)
-        master_df.to_excel(wr, sheet_name="app_master", index=False)
-        submission_df.to_excel(wr, sheet_name="submission_summary", index=False)
+        submission_obs_df.to_excel(wr, sheet_name="version_history", index=False)
+        master_df.to_excel(wr, sheet_name="app_index", index=False)
+        submission_df.to_excel(wr, sheet_name="summary", index=False)
 
     try:
         from visualization_summary import try_append_visualization_sheet
 
         try_append_visualization_sheet(xlsx, version_df_public)
     except Exception as e:
-        print(f"[warn] viz_fast_scan hook failed: {e}", file=sys.stderr)
+        print(f"[warn] charts hook failed: {e}", file=sys.stderr)
 
     _apply_normalized_workbook_openpyxl_formatting(xlsx)
 

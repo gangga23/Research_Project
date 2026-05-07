@@ -54,6 +54,46 @@ HEUR_INCLUDE = re.compile(
     re.I,
 )
 
+_WAYBACK_REVIEW_LIKE = re.compile(
+    r"\b(i\s+love|i\s+hate|please\s+fix|doesn'?t\s+work|crash(?:es|ing)?|"
+    r"wifi|pen\s*test|scam(?:mer|my)?|shady|track(?:ing)?|location|"
+    r"dm|dms|nude|traffick|podcast|interface|user\s*friendly|"
+    r"shuffle|playlist|song|premium|ads?\b|ban(?:ned)?|appeal|stars?\b|rating\b)\b",
+    re.I,
+)
+_WAYBACK_REVIEW_PUNCT = re.compile(r"[!?]{2,}|[\U0001F300-\U0001FAFF]")
+_WAYBACK_APP_UX = re.compile(
+    r"\b(app|android|ios|update|interface|ui|feature|broken|workaround|keyboard|"
+    r"performance|sluggish|table|enter|column|dm|refund|driver|restaurant|order)\b",
+    re.I,
+)
+
+
+def _looks_like_user_review(text: str) -> bool:
+    s = (text or "").strip()
+    if not s or s == "Not available":
+        return False
+    # Long first-person complaint prose is almost always a review, not a changelog.
+    pronouns = len(re.findall(r"\b(i|i'm|ive|i've|my|me)\b", s, flags=re.I))
+    if len(s) >= 180 and pronouns >= 3:
+        return True
+    if len(s) >= 420 and (pronouns >= 2 or _WAYBACK_APP_UX.search(s)):
+        return True
+    if len(s) >= 200 and pronouns >= 1 and _WAYBACK_APP_UX.search(s):
+        return True
+    if len(s) >= 160 and _WAYBACK_REVIEW_PUNCT.search(s) and (pronouns >= 1 or _WAYBACK_APP_UX.search(s)):
+        return True
+    if len(s) >= 220 and _WAYBACK_REVIEW_LIKE.search(s):
+        return True
+    # Strong review markers.
+    if _WAYBACK_REVIEW_LIKE.search(s):
+        # Avoid sanitizing genuine changelog-y snippets.
+        # Note: avoid generic "release" because reviews often say "new release".
+        if re.search(r"\bwhat'?s\s+new\b|\bbug\s*fix(?:es)?\b|\bimprov(?:e|ement|ements)?\b|\bstability\b", s, re.I):
+            return False
+        return True
+    return False
+
 
 def fetch_play_detail_html(package_id: str, lang: str = "en", country: str = "us") -> str:
     url = Formats.Detail.build(app_id=package_id, lang=lang, country=country)
@@ -539,6 +579,7 @@ def build_android_history_rows(
     )
 
     seen_norm = {_norm_note(notes_primary)} if notes_primary != "Not available" else set()
+    seen_dates: set[str] = set()
     wayback_hits = 0
     wb_cap = 0
     for ts in wayback_timestamps_merged(package_id, max_per_pattern=50):
@@ -549,12 +590,21 @@ def build_android_history_rows(
             continue
         wraw = heuristic_whatsnew_from_html(wh, None)
         wnotes = _clean_notes(wraw)
-        if wnotes == "Not available":
+        rdate = _ts_to_date(ts)
+        if rdate and rdate in seen_dates:
             continue
+        if rdate:
+            seen_dates.add(rdate)
+        dq_note = ""
+        if _looks_like_user_review(wnotes):
+            dq_note = "Unverified user review text (not official release notes); excluded from analysis."
+            wnotes = "Not available"
         nh = _norm_note(wnotes)
-        if nh in seen_norm:
+        if nh in seen_norm and not dq_note:
+            # Avoid duplicates when we actually have structured notes; keep DQ-flagged snapshots.
             continue
-        seen_norm.add(nh)
+        if nh and nh != "not available":
+            seen_norm.add(nh)
         wayback_hits += 1
         wb_cap += 1
         rows.append(
@@ -563,12 +613,13 @@ def build_android_history_rows(
                 "app_name": name,
                 "platform": "Android",
                 "version_number": "",
-                "release_date": _ts_to_date(ts),
+                "release_date": rdate,
                 "release_notes": wnotes,
                 "source_type": "wayback_snapshot",
                 "confidence_level": "medium",
                 "update_category": categorize_fn(wnotes),
                 "history_source_url": android_wayback_capture_url(ts, package_id),
+                "_dq_pipeline_note": dq_note,
             }
         )
         time.sleep(0.22)
