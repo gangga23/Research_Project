@@ -3,9 +3,10 @@ Fast-scan visuals aligned with ``timeseries_insights_core`` (same facts as
 ``submission_summary.build_timeseries_insights``):
 
 This sheet is intentionally small and rubric-aligned:
-- update frequency over time by app (cadence heatmap)
-- category share shift (oldest vs newest quartile; slope chart)
+- update frequency over time by app (cadence heatmaps — iOS / Android)
+- observation URL profile (`history_source_url`: Wayback vs APKMirror vs store listing)
 - iOS vs Android observation depth per app (dated span)
+- category share shift (oldest vs newest quartile; slope chart)
 
 Uses Matplotlib (Agg) + openpyxl images; no network.
 """
@@ -583,6 +584,109 @@ def _chart_category_evolution_quartile_buckets(version_df: pd.DataFrame) -> io.B
     return buf
 
 
+def _classify_history_source_url(url: object) -> str:
+    """Bucket ``history_source_url`` host for visualization (matches rubric single URL column)."""
+    s = str(url or "").strip().lower()
+    if not s:
+        return "Other"
+    if "web.archive.org" in s:
+        return "Wayback"
+    if "apkmirror.com" in s:
+        return "APKMirror"
+    if any(h in s for h in ("play.google.com", "apps.apple.com", "itunes.apple.com")):
+        return "Store listing"
+    return "Other"
+
+
+def _chart_history_url_class_by_platform(version_df: pd.DataFrame) -> io.BytesIO | None:
+    """Stacked 100% horizontal bars: URL host class within each platform (all observation rows)."""
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    if "history_source_url" not in version_df.columns or len(version_df) < 1:
+        return None
+
+    df = version_df.copy()
+    df["_ucls"] = df["history_source_url"].map(_classify_history_source_url)
+    classes = ("Wayback", "APKMirror", "Store listing", "Other")
+    colors = {
+        "Wayback": "#5c6bc0",
+        "APKMirror": "#ef6c00",
+        "Store listing": "#43a047",
+        "Other": "#9e9e9e",
+    }
+
+    platforms: list[str] = []
+    mat: list[list[float]] = []
+    for plat in ("iOS", "Android"):
+        p = df[df["platform"].astype(str) == plat]
+        if len(p) == 0:
+            continue
+        platforms.append(plat)
+        n = len(p)
+        mat.append([100.0 * float((p["_ucls"] == c).sum()) / float(n) for c in classes])
+
+    if not platforms:
+        return None
+
+    mat_arr = np.array(mat, dtype=float)
+    fig_h = max(2.95, 0.52 * len(platforms) + 2.05)
+    fig, ax = plt.subplots(figsize=(8.0, fig_h))
+    fig.patch.set_facecolor("#ffffff")
+    ax.set_facecolor("#ffffff")
+
+    y = np.arange(len(platforms))
+    left = np.zeros(len(platforms))
+    bar_h = 0.52
+    for j, cls in enumerate(classes):
+        vals = mat_arr[:, j]
+        ax.barh(
+            y,
+            vals,
+            height=bar_h,
+            left=left,
+            label=cls,
+            color=colors[cls],
+            edgecolor="#ffffff",
+            linewidth=0.85,
+        )
+        left = left + vals
+
+    ax.set_yticks(y)
+    ax.set_yticklabels(platforms, fontsize=11, fontweight="600")
+    ax.set_xlabel("Share of observations within platform (%)", fontsize=11)
+    ax.set_xlim(0, 100)
+    ax.set_title(
+        "1C. Observation URL profile by platform (history_source_url)",
+        fontsize=13,
+        fontweight="600",
+    )
+    ax.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.14),
+        ncol=4,
+        fontsize=9,
+        frameon=True,
+        fancybox=True,
+        edgecolor="#cdd6e4",
+    )
+    ax.tick_params(axis="x", labelsize=10)
+    fig.subplots_adjust(left=0.14, right=0.98, top=0.88, bottom=0.22)
+    buf = io.BytesIO()
+    fig.savefig(
+        buf,
+        format="png",
+        dpi=115,
+        bbox_inches=None,
+        facecolor="#ffffff",
+        edgecolor="none",
+        pad_inches=0.08,
+    )
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
 def _chart_observation_depth_by_app_platform(version_df: pd.DataFrame) -> io.BytesIO | None:
     """
     (3) iOS vs Android observation depth: dated span in days per app per platform.
@@ -837,6 +941,10 @@ def append_visualization_sheet(xlsx_path: Path, version_df: pd.DataFrame) -> Non
     )
     and_png = _save_png_bytes(and_buf, charts_dir / "heatmap_android.png") if and_buf else None
     images.append(("1B. Android cadence heatmap", and_png))
+
+    url_buf = _chart_history_url_class_by_platform(version_df)
+    url_png = _save_png_bytes(url_buf, charts_dir / "url_class_by_platform.png") if url_buf else None
+    images.append(("1C. Observation URL profile by platform (Wayback / APKMirror / store listing)", url_png))
 
     depth_buf = _chart_observation_depth_by_app_platform(version_df)
     depth_png = _save_png_bytes(depth_buf, charts_dir / "depth_by_app_platform.png") if depth_buf else None

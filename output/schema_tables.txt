@@ -1,8 +1,8 @@
 TABLE submission_observations (assignment-aligned denormalized export)
   app_id, app_name, platform, developer, category, initial_release_date,
   version_number, release_date, is_current_version (Yes | No | Unknown),
-  store_current_version, store_current_version_release_date, listing_source_url,
-  history_source_url (Wayback capture, feed entry link, or live store listing URL for this row),
+  store_current_version, store_current_version_release_date,
+  history_source_url (single clickable source URL: Wayback/feed/APKMirror row URL when https; else store listing),
   release_notes, update_category, update_summary, source_type, confidence_level, notes
 
 TABLE app_master
@@ -14,17 +14,17 @@ TABLE app_version_history
   version_number (empty string when unknown; never fabricated)
   release_date (ISO YYYY-MM-DD or empty)
   release_notes (cleaned; Not available when absent)
-  history_source_url (best URL for this observation: archived listing, RSS item link, or live listing)
+  history_source_url (listing/Wayback/feed scrape URL; APKMirror permalink when matched from data/cache)
   source_type (strict):
     - play_store_snapshot | wayback_snapshot | developer_changelog |
-      feature_signal | review_inferred (Android)
+      feature_signal | apkmirror_cache | review_inferred (Android)
     - app_store_web (iOS web / lookup fallback)
   confidence_level: high | medium | low
   update_category: one of ten fixed labels
 
 Android: Play live HTML+app() snapshot (high) → Wayback archived Play pages
 (medium) → optional feed URL: validator classifies feed; matching items become
-developer_changelog, non-matching items feature_signal → review_inferred (low)
-only if snapshot+Wayback yield no structured signal and the feed produced no
-developer_changelog rows. iOS: app_store_web embedded versionHistory (high) or
-lookup-only fallback (medium).
+developer_changelog, non-matching items feature_signal → optional
+data/cache/apkmirror_{app_id}.csv rows as apkmirror_cache (medium) → review_inferred (low)
+only if none of the above yield structured signal (including APKMirror cache).
+iOS: app_store_web embedded versionHistory (high) or lookup-only fallback (medium).

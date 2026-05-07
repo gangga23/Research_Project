@@ -4,17 +4,26 @@ Android version history: hierarchical sources
 Play snapshot (high) → merged Wayback CDX (medium) → optional developer
 RSS/Atom (`android_changelog_feed_url`): auto-classified feeds; only
 `release_feed` entries with semver or explicit in-text date become
-`developer_changelog`; others become `feature_signal` → review inferred (low).
+`developer_changelog`; others become `feature_signal`.
+
+If ``data/cache/apkmirror_{app_id}.csv`` exists with usable rows (version + APKMirror
+/apk/ URL), those rows are ingested as ``apkmirror_cache`` (medium) and count as
+structured coverage — skipping the review inferred fallback.
+
+Review inferred (low) runs only when snapshot, Wayback, feed strict changelog,
+and APKMirror cache together provide no structured signal.
 """
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import re
 import time
 from collections import defaultdict
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable
 
 from feed_validator import (
@@ -343,6 +352,97 @@ def developer_feed_rows_from_url(
     return rows, meta
 
 
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _apkmirror_cache_csv_path(app_id: str) -> Path:
+    return _project_root() / "data" / "cache" / f"apkmirror_{app_id}.csv"
+
+
+def _android_row_version_keys(rows: list[dict[str, str]]) -> set[tuple[str, str]]:
+    keys: set[tuple[str, str]] = set()
+    for r in rows:
+        v = (r.get("version_number") or "").strip()
+        d = (r.get("release_date") or "").strip()
+        keys.add((v, d))
+    return keys
+
+
+def _usable_apkmirror_row_url(url: str) -> bool:
+    u = (url or "").strip().lower()
+    if not u.startswith(("http://", "https://")):
+        return False
+    if "apkmirror.com" not in u:
+        return False
+    return "/apk/" in u
+
+
+def load_apkmirror_cache_rows(
+    app_name: str,
+    app_id: str,
+    categorize_fn: Callable[[str], str],
+    existing_rows: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    """
+    Load ``data/cache/apkmirror_{app_id}.csv`` release rows (non-empty version + /apk/ URL).
+
+    Dedupes against ``existing_rows`` by (version_number, release_date).
+    """
+    path = _apkmirror_cache_csv_path(app_id)
+    if not path.is_file():
+        return []
+
+    keys = _android_row_version_keys(existing_rows)
+    seen_apk: set[tuple[str, str]] = set()
+    out: list[dict[str, str]] = []
+
+    try:
+        with path.open(encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            if reader.fieldnames is None:
+                return []
+            cols = {h.strip() for h in reader.fieldnames}
+            if not {"app_id", "version_number", "apkmirror_url"}.issubset(cols):
+                return []
+            for row in reader:
+                aid = (row.get("app_id") or "").strip()
+                if aid != app_id:
+                    continue
+                ver = (row.get("version_number") or "").strip()
+                if not ver:
+                    continue
+                url = (row.get("apkmirror_url") or "").strip()
+                if not _usable_apkmirror_row_url(url):
+                    continue
+                rdate = (row.get("release_date") or "").strip()
+                key = (ver, rdate)
+                if key in keys or key in seen_apk:
+                    continue
+                seen_apk.add(key)
+                keys.add(key)
+
+                ucat = categorize_fn("Not available")
+                out.append(
+                    {
+                        "app_id": app_id,
+                        "app_name": app_name,
+                        "platform": "Android",
+                        "version_number": ver,
+                        "release_date": rdate,
+                        "release_notes": "Not available",
+                        "source_type": "apkmirror_cache",
+                        "confidence_level": "medium",
+                        "update_category": ucat,
+                        "history_source_url": url,
+                    }
+                )
+    except OSError:
+        return []
+
+    return out
+
+
 def fetch_review_fallback_rows(
     package_id: str,
     *,
@@ -500,7 +600,11 @@ def build_android_history_rows(
             for r in feed_rows
         )
 
-    structured = structured or wayback_hits > 0 or changelog_feed_structured
+    apk_cache_rows = load_apkmirror_cache_rows(name, app_id, categorize_fn, rows)
+    rows.extend(apk_cache_rows)
+    apk_mirror_nonempty = len(apk_cache_rows) > 0
+
+    structured = structured or wayback_hits > 0 or changelog_feed_structured or apk_mirror_nonempty
 
     if not structured and wayback_hits == 0 and not changelog_feed_structured:
         for item in fetch_review_fallback_rows(package_id):

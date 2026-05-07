@@ -4,6 +4,8 @@
     "app_name": "Instagram",
     "ios_app_id": 389801252,
     "android_package": "com.instagram.android",
+    "apkmirror_slug": "instagram/instagram-instagram",
+    "apkmirror_category": "instagram-instagram",
     "category_label": "Social",
     "monetization_bucket": "ads_creator"
   },
@@ -12,6 +14,8 @@
     "app_name": "TikTok",
     "ios_app_id": 835599320,
     "android_package": "com.zhiliaoapp.musically",
+    "apkmirror_slug": "tiktok-pte-ltd/tik-tok-including-musical-ly",
+    "apkmirror_category": "tik-tok-including-musical-ly",
     "category_label": "Social / entertainment",
     "monetization_bucket": "ads_creator"
   },
@@ -20,6 +24,8 @@
     "app_name": "Spotify",
     "ios_app_id": 324684580,
     "android_package": "com.spotify.music",
+    "apkmirror_slug": "spotify-ab/spotify-music",
+    "apkmirror_category": "spotify-music",
     "category_label": "Music",
     "monetization_bucket": "subscription_ads"
   },
@@ -28,6 +34,8 @@
     "app_name": "Netflix",
     "ios_app_id": 363590051,
     "android_package": "com.netflix.mediaclient",
+    "apkmirror_slug": "netflix-inc/netflix",
+    "apkmirror_category": "netflix",
     "category_label": "Video streaming",
     "monetization_bucket": "subscription"
   },
@@ -36,6 +44,8 @@
     "app_name": "Amazon Shopping",
     "ios_app_id": 297606951,
     "android_package": "com.amazon.mShop.android.shopping",
+    "apkmirror_slug": "amazon-mobile-llc/amazon-shopping",
+    "apkmirror_category": "amazon-shopping",
     "category_label": "Shopping",
     "monetization_bucket": "marketplace_retail_ads"
   },
@@ -44,6 +54,8 @@
     "app_name": "Uber",
     "ios_app_id": 368677368,
     "android_package": "com.ubercab",
+    "apkmirror_slug": "uber-technologies-inc/uber-request-a-ride",
+    "apkmirror_category": "uber-request-a-ride",
     "category_label": "Transportation",
     "monetization_bucket": "marketplace_take_rate"
   },
@@ -52,6 +64,8 @@
     "app_name": "DoorDash",
     "ios_app_id": 719972451,
     "android_package": "com.dd.doordash",
+    "apkmirror_slug": "doordash-inc/doordash",
+    "apkmirror_category": "doordash",
     "category_label": "Food delivery",
     "monetization_bucket": "marketplace_take_rate_sub"
   },
@@ -60,6 +74,8 @@
     "app_name": "PayPal",
     "ios_app_id": 283646709,
     "android_package": "com.paypal.android.p2pmobile",
+    "apkmirror_slug": "paypal-mobile-corp/paypal-mobile",
+    "apkmirror_category": "paypal-mobile",
     "category_label": "Finance",
     "monetization_bucket": "payments_fintech"
   },
@@ -68,6 +84,7 @@
     "app_name": "Notion",
     "ios_app_id": 1232780281,
     "android_package": "notion.id",
+    "apkmirror_slug": "",
     "android_changelog_feed_url": "https://www.notion.com/releases/rss.xml",
     "category_label": "Productivity",
     "monetization_bucket": "freemium_subscription"
@@ -77,6 +94,8 @@
     "app_name": "Duolingo",
     "ios_app_id": 570060128,
     "android_package": "com.duolingo",
+    "apkmirror_slug": "duolingo/duolingo-duolingo",
+    "apkmirror_category": "duolingo-duolingo",
     "android_changelog_feed_url": "https://blog.duolingo.com/rss/",
     "category_label": "Education",
     "monetization_bucket": "freemium_ads_sub"

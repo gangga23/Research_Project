@@ -49,6 +49,7 @@ ALLOWED_SOURCE_TYPES = frozenset(
         "wayback_snapshot",
         "developer_changelog",
         "feature_signal",
+        "apkmirror_cache",
         "review_inferred",
         "app_store_web",
     }
@@ -539,8 +540,8 @@ def schema_text() -> str:
     return """TABLE submission_observations (assignment-aligned denormalized export)
   app_id, app_name, platform, developer, category, initial_release_date,
   version_number, release_date, is_current_version (Yes | No | Unknown),
-  store_current_version, store_current_version_release_date, listing_source_url,
-  history_source_url (Wayback capture, feed entry link, or live store listing URL for this row),
+  store_current_version, store_current_version_release_date,
+  history_source_url (single clickable source URL: Wayback/feed/APKMirror row URL when https; else store listing),
   release_notes, update_category, update_summary, source_type, confidence_level, notes
 
 TABLE app_master
@@ -552,20 +553,20 @@ TABLE app_version_history
   version_number (empty string when unknown; never fabricated)
   release_date (ISO YYYY-MM-DD or empty)
   release_notes (cleaned; Not available when absent)
-  history_source_url (best URL for this observation: archived listing, RSS item link, or live listing)
+  history_source_url (listing/Wayback/feed scrape URL; APKMirror permalink when matched from data/cache)
   source_type (strict):
     - play_store_snapshot | wayback_snapshot | developer_changelog |
-      feature_signal | review_inferred (Android)
+      feature_signal | apkmirror_cache | review_inferred (Android)
     - app_store_web (iOS web / lookup fallback)
   confidence_level: high | medium | low
   update_category: one of ten fixed labels
 
 Android: Play live HTML+app() snapshot (high) → Wayback archived Play pages
 (medium) → optional feed URL: validator classifies feed; matching items become
-developer_changelog, non-matching items feature_signal → review_inferred (low)
-only if snapshot+Wayback yield no structured signal and the feed produced no
-developer_changelog rows. iOS: app_store_web embedded versionHistory (high) or
-lookup-only fallback (medium).
+developer_changelog, non-matching items feature_signal → optional
+data/cache/apkmirror_{app_id}.csv rows as apkmirror_cache (medium) → review_inferred (low)
+only if none of the above yield structured signal (including APKMirror cache).
+iOS: app_store_web embedded versionHistory (high) or lookup-only fallback (medium).
 """
 
 
@@ -598,6 +599,7 @@ def data_quality_report(version_df: pd.DataFrame, n_config_apps: int, master_row
     p_way = _pct(ad["source_type"] == "wayback_snapshot")
     p_dev = _pct(ad["source_type"] == "developer_changelog")
     p_feat = _pct(ad["source_type"] == "feature_signal")
+    p_apk = _pct(ad["source_type"] == "apkmirror_cache")
     p_rev = _pct(ad["source_type"] == "review_inferred")
     mv = ad["version_number"].fillna("").astype(str).str.strip() == ""
     miss_ver = 100.0 * float(mv.sum()) / na
@@ -615,6 +617,7 @@ def data_quality_report(version_df: pd.DataFrame, n_config_apps: int, master_row
         f"pct_android_wayback_snapshot_rows: {p_way:.1f}%",
         f"pct_android_developer_changelog_rows: {p_dev:.1f}%",
         f"pct_android_feature_signal_rows: {p_feat:.1f}%",
+        f"pct_android_apkmirror_cache_rows: {p_apk:.1f}%",
         f"pct_android_review_inferred_rows: {p_rev:.1f}%",
         f"pct_android_missing_version_number: {miss_ver:.1f}%",
         f"pct_all_rows_release_notes_not_available: {100.0 * float((version_df['release_notes'] == 'Not available').sum()) / max(n, 1):.1f}%",

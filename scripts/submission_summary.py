@@ -182,7 +182,14 @@ def _metrics_block_for_summary(version_df: pd.DataFrame) -> str:
         .value_counts()
     )
     src_lines = []
-    for k in ("developer_changelog", "feature_signal", "wayback_snapshot", "play_store_snapshot"):
+    for k in (
+        "developer_changelog",
+        "feature_signal",
+        "wayback_snapshot",
+        "play_store_snapshot",
+        "apkmirror_cache",
+        "review_inferred",
+    ):
         if k in src.index:
             src_lines.append(f"  {k:<19} {int(src.loc[k])}")
 
@@ -531,7 +538,6 @@ SUBMISSION_OBSERVATION_COLUMN_ORDER: tuple[str, ...] = (
     "is_current_version",
     "store_current_version",
     "store_current_version_release_date",
-    "listing_source_url",
     "history_source_url",
     "release_notes",
     "update_category",
@@ -540,6 +546,20 @@ SUBMISSION_OBSERVATION_COLUMN_ORDER: tuple[str, ...] = (
     "confidence_level",
     "notes",
 )
+
+
+def _submission_observations_history_source_url(row: pd.Series) -> str:
+    """
+    One rubric URL per row: prefer pipeline ``history_source_url`` (Wayback, feed item,
+    APKMirror release page, etc.) when https; otherwise fall back to store listing.
+    """
+    h = str(row.get("history_source_url") or "").strip()
+    if h.startswith(("http://", "https://")):
+        return h
+    l = str(row.get("listing_source_url") or "").strip()
+    if l.startswith(("http://", "https://")):
+        return l
+    return h or l
 
 
 def build_submission_observations(version_df: pd.DataFrame, master_df: pd.DataFrame) -> pd.DataFrame:
@@ -567,6 +587,7 @@ def build_submission_observations(version_df: pd.DataFrame, master_df: pd.DataFr
     merged["is_current_version"] = merged.apply(_is_current_cell, axis=1)
     merged["notes"] = merged.apply(_observation_notes, axis=1)
     merged["update_summary"] = merged.apply(_standardized_update_summary, axis=1)
+    merged["history_source_url"] = merged.apply(_submission_observations_history_source_url, axis=1)
     if "_dq_pipeline_note" in merged.columns:
         merged = merged.drop(columns=["_dq_pipeline_note"])
     return merged[list(SUBMISSION_OBSERVATION_COLUMN_ORDER)]
@@ -590,9 +611,9 @@ def build_cover_sheet_dataframe(repo_url: str, *, n_apps: int, n_obs: int) -> pd
         "submission_summary — methodology, automated time-series commentary, quick-scan dashboard bullets "
         "(density / cadence / provenance / quartile trends), challenges + confidence interpretation.\n\n"
         "timeseries_metrics — key counts derived from version history.\n\n"
-        "viz_fast_scan — synopsis bullets mirroring Time-series insights; charts 1–5 analytic cuts; charts 6–8 "
-        "Quick-Scan dashboard (stacked year×platform density; selected source_type stacks; quartile category-share "
-        "slopes for top update_category buckets) — requires matplotlib.\n\n"
+        "viz_fast_scan — synopsis bullets mirroring Time-series insights; monthly cadence heatmaps (iOS/Android); "
+        "URL-class profile from history_source_url (Wayback vs APKMirror vs store listing); observation depth by "
+        "app/platform (dated span); quartile category-share slope chart — requires matplotlib.\n\n"
         "validation / data_quality / field_schema — pipeline diagnostics and schema reference."
     )
     mapping = (
@@ -606,10 +627,9 @@ def build_cover_sheet_dataframe(repo_url: str, *, n_apps: int, n_obs: int) -> pd
         "Initial app release date → initial_release_date\n"
         "Update description / release notes → release_notes\n"
         "Standardized update category → update_category (single best-fit label per rubric; multi-signal updates default to primary cue)\n"
-        "Brief standardized summary for variables → update_summary (format short_code:primary_descriptor; full release_notes retained for re-coding)\n"
-        "Source URL (store listing; clickable when Excel recognizes https) → listing_source_url\n"
-        "Per-observation history URL (Wayback capture, feed article link, or same listing when no finer URL) "
-        "→ history_source_url\n"
+        "Brief standardized summary for variables → update_summary (short_code:primary_descriptor; plain text for coding)\n"
+        "Source of update history (clickable URL in Excel) → history_source_url "
+        "(Wayback capture, feed/APKMirror permalink when present for that row; else store listing URL)\n"
         "Listing snapshot: store-reported current version + date → store_current_version, "
         "store_current_version_release_date\n"
         "Observation provenance → source_type, confidence_level\n"

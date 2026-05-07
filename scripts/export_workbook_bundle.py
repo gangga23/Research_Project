@@ -235,10 +235,7 @@ def _apply_normalized_workbook_openpyxl_formatting(xlsx_path: Path) -> None:
         rn_ci = hdr_map.get("release_notes")
         notes_ci = hdr_map.get("notes")
         summ_ci = hdr_map.get("update_summary")
-        url_cols_ci = [
-            hdr_map.get("listing_source_url"),
-            hdr_map.get("history_source_url"),
-        ]
+        url_cols_ci = [hdr_map.get("history_source_url")]
 
         for c in range(1, ws.max_column + 1):
             cap = 60.0 if c in {rn_ci, notes_ci, summ_ci} else None
@@ -418,6 +415,12 @@ def export_workbook_bundle(
         version_df["history_source_url"] = (
             version_df["history_source_url"].fillna("").astype(str).map(lambda x: x.strip())
         )
+    try:
+        from apkmirror_history_merge import merge_apkmirror_history_urls
+
+        version_df = merge_apkmirror_history_urls(version_df, repo_root / "data" / "cache")
+    except ImportError:
+        pass
     validate_frames(master_df, version_df)
     output_dir.mkdir(parents=True, exist_ok=True)
 

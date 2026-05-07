@@ -143,7 +143,7 @@ def build_quick_scan_insights_text(version_df: pd.DataFrame) -> str:
         )
         bullets.append(
             "• Provenance: contrast app_store_web (iOS) vs Android wayback_snapshot / feature_signal / "
-            "developer_changelog mix — see viz chart (B)."
+            "developer_changelog mix — see cadence heatmaps (1A–1B) and URL-class chart (1C)."
         )
         return "\n".join(bullets[:8])
 
@@ -178,7 +178,7 @@ def build_quick_scan_insights_text(version_df: pd.DataFrame) -> str:
         f"{src_share(ios, {'app_store_web'}):.0f}% of rows; Android developer_changelog + play snapshot ≈"
         f"{src_share(andf, {'developer_changelog', 'play_store_snapshot'}):.0f}% vs "
         f"wayback_snapshot + feature_signal ≈{src_share(andf, {'wayback_snapshot', 'feature_signal'}):.0f}% "
-        "(chart B)."
+        "(cadence heatmaps 1A–1B; URL-class mix 1C)."
     )
 
     split = _quartile_oldest_newest(sub)
@@ -201,11 +201,14 @@ def build_quick_scan_insights_text(version_df: pd.DataFrame) -> str:
         bits = [b for b in bits if b]
         if bits:
             bullets.append(
-                "• Category quartiles (oldest → newest dated quartile): " + "; ".join(bits) + " — chart (C)."
+                "• Category quartiles (oldest → newest dated quartile): "
+                + "; ".join(bits)
+                + " — category quartile slope chart."
             )
         else:
             bullets.append(
-                "• Category quartiles: bug-fix / AI / monetization stable (<3 pp swing) on this timeline — chart (C)."
+                "• Category quartiles: bug-fix / AI / monetization stable (<3 pp swing) on this timeline — "
+                "category quartile slope chart."
             )
     else:
         bullets.append(
